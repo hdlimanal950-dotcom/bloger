@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """
-She Cooks Bakes AI v4.1.0
-Fixed: Flask app.run() conflict with Render
-Solution: Waitress WSGI server
+She Cooks Bakes AI v4.2.0
+✅ Fixed: Scheduler lock conflict (Memory jobstore)
+✅ Fixed: Mobile access to /post-now (GET + POST)
+✅ Fixed: Rate limit handling (Extended delays)
 """
 import os, sys, json, time, random, logging, sqlite3, requests, threading, shutil
 from datetime import datetime, timedelta
@@ -10,16 +11,16 @@ from typing import Dict, Optional, List, Tuple
 from contextlib import contextmanager
 from collections import deque
 from waitress import serve
-from flask import Flask, jsonify
+from flask import Flask, jsonify, render_template_string
 from openai import OpenAI, APIError, RateLimitError, APIConnectionError
 import pytumblr
 from apscheduler.schedulers.background import BackgroundScheduler
-from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
+from apscheduler.jobstores.memory import MemoryJobStore
 from logging.handlers import RotatingFileHandler
 
 class Config:
     APP_NAME = "She Cooks Bakes AI"
-    VERSION = "4.1.0"
+    VERSION = "4.2.0"
     ENVIRONMENT = os.getenv("ENVIRONMENT", "production")
     FLASK_HOST = "0.0.0.0"
     FLASK_PORT = int(os.getenv("PORT", 10000))
@@ -33,10 +34,10 @@ class Config:
     DB_MAX_BACKUPS = 7
     TOPIC_CACHE_SIZE = 10
     OPENAI_MAX_RETRIES = 3
-    OPENAI_RETRY_DELAY = 2
+    OPENAI_RETRY_DELAY = 5
     TUMBLR_MAX_RETRIES = 3
-    TUMBLR_RETRY_DELAY = 2
-    OPENAI_RATE_LIMIT_PAUSE = 60
+    TUMBLR_RETRY_DELAY = 3
+    OPENAI_RATE_LIMIT_PAUSE = 90
     SELF_PING_ENABLED = True
     SELF_PING_INTERVAL = 840
     BLOG_URL = "she-cooks-bakes.tumblr.com"
@@ -218,24 +219,43 @@ class APIClients:
             try:
                 metrics.record_api_call(success=True)
                 return func()
-            except RateLimitError:
+            except RateLimitError as e:
                 metrics.record_api_call(success=False)
-                logger.warning(f"Rate limit: {operation_name}")
-                if attempt < max_retries - 1: time.sleep(Config.OPENAI_RATE_LIMIT_PAUSE)
-                else: raise
-            except APIConnectionError:
+                logger.warning(f"⚠️ Rate limit hit: {operation_name}")
+                if attempt < max_retries - 1:
+                    wait_time = Config.OPENAI_RATE_LIMIT_PAUSE
+                    logger.info(f"⏳ Waiting {wait_time}s for rate limit cooldown...")
+                    time.sleep(wait_time)
+                else:
+                    logger.error(f"❌ Rate limit exceeded after {max_retries} attempts")
+                    raise
+            except APIConnectionError as e:
                 metrics.record_api_call(success=False)
-                logger.warning(f"Connection error: {operation_name}")
-                if attempt < max_retries - 1: time.sleep(Config.OPENAI_RETRY_DELAY * (2 ** attempt))
-                else: raise
+                logger.warning(f"⚠️ Connection error: {operation_name}")
+                if attempt < max_retries - 1:
+                    delay = Config.OPENAI_RETRY_DELAY * (2 ** attempt)
+                    logger.info(f"⏳ Retrying in {delay}s...")
+                    time.sleep(delay)
+                else:
+                    raise
             except APIError as e:
                 metrics.record_api_call(success=False)
-                if attempt < max_retries - 1 and e.status_code >= 500: time.sleep(Config.OPENAI_RETRY_DELAY * (2 ** attempt))
-                else: raise
-            except:
+                logger.error(f"❌ API error: {operation_name} - Status {e.status_code if hasattr(e, 'status_code') else 'unknown'}")
+                if attempt < max_retries - 1 and (not hasattr(e, 'status_code') or e.status_code >= 500):
+                    delay = Config.OPENAI_RETRY_DELAY * (2 ** attempt)
+                    logger.info(f"⏳ Retrying in {delay}s...")
+                    time.sleep(delay)
+                else:
+                    raise
+            except Exception as e:
                 metrics.record_api_call(success=False)
-                if attempt < max_retries - 1: time.sleep(Config.OPENAI_RETRY_DELAY * (2 ** attempt))
-                else: raise
+                logger.error(f"❌ Unexpected error: {operation_name} - {str(e)}")
+                if attempt < max_retries - 1:
+                    delay = Config.OPENAI_RETRY_DELAY * (2 ** attempt)
+                    logger.info(f"⏳ Retrying in {delay}s...")
+                    time.sleep(delay)
+                else:
+                    raise
 
 class ContentEngine:
     def __init__(self, api_clients: APIClients, db_manager: DatabaseManager):
@@ -250,7 +270,9 @@ class ContentEngine:
         topics = ["Chocolate Lava Cake", "French Macarons", "Artisan Bread", "Italian Tiramisu", "Red Velvet Cupcakes", "Vegan Cookies", "Professional Cheesecake", "Baklava", "Matcha Desserts", "American Pancakes", "Belgian Truffles", "French Croissants", "New York Cheesecake", "Italian Cannoli", "Spanish Churros", "British Scones", "Black Forest Cake", "Apple Strudel", "Custard Tarts", "Chocolate Fondue", "Cinnamon Rolls", "Lemon Pie", "Carrot Cake", "Brownies", "Banana Bread"]
         recent = self.db.get_recent_topics(Config.TOPIC_CACHE_SIZE)
         available = [t for t in topics if t not in recent]
-        if not available: available = topics
+        if not available: 
+            logger.info("🔄 Topic cache reset")
+            available = topics
         topic = random.choice(available)
         self.db.add_to_topic_cache(topic)
         return topic
@@ -260,7 +282,9 @@ class ContentEngine:
             content = response.choices[0].message.content.strip()
             return json.loads(content) if content.startswith('{') else self._fallback_content(topic)
         try: return self.clients.retry_with_smart_backoff(_generate, "AI Text", Config.OPENAI_MAX_RETRIES)
-        except: return self._fallback_content(topic)
+        except: 
+            logger.warning("⚠️ Using fallback content due to API failure")
+            return self._fallback_content(topic)
     def _fallback_content(self, topic: str):
         return {"title": f"Mastering {topic}", "introduction": f"Welcome to our guide on {topic}.", "description": "This recipe combines traditional and modern techniques.", "ingredients": ["Flour", "Sugar", "Butter", "Eggs", "Vanilla", "Baking powder"], "tips": ["Use room temp ingredients", "Preheat oven", "Don't overmix"], "cta": "Visit our blog!"}
     def generate_ai_image(self, description: str):
@@ -268,7 +292,9 @@ class ContentEngine:
             response = self.clients.openai_client.images.generate(model="dall-e-3", prompt=f"Professional food photography: {description}", size="1024x1024", quality="standard", n=1)
             return response.data[0].url
         try: return self.clients.retry_with_smart_backoff(_generate, "AI Image", Config.OPENAI_MAX_RETRIES)
-        except: return self._fallback_image()
+        except: 
+            logger.warning("⚠️ Using fallback image due to API failure")
+            return self._fallback_image()
     def _fallback_image(self):
         images = self.backup_images[self.current_source]
         image = images[self.image_index % len(images)]
@@ -277,6 +303,7 @@ class ContentEngine:
             sources = list(self.backup_images.keys())
             idx = sources.index(self.current_source)
             self.current_source = sources[(idx + 1) % len(sources)]
+        logger.info(f"📸 Fallback image from {self.current_source}")
         return image
     def generate_trending_tags(self):
         return random.sample(["Foodie", "InstaFood", "Yummy", "FoodPhotography", "BakingFromScratch", "DessertLover", "HomeChef", "EasyRecipes", "FoodBlogger", "SweetTooth"], 4)
@@ -290,7 +317,8 @@ class PublishingManager:
         self.engine = content_engine
         self.db = db_manager
     def human_delay(self, min_s=None, max_s=None):
-        time.sleep(random.randint(min_s or Config.HUMAN_DELAY_MIN, max_s or Config.HUMAN_DELAY_MAX))
+        delay = random.randint(min_s or Config.HUMAN_DELAY_MIN, max_s or Config.HUMAN_DELAY_MAX)
+        time.sleep(delay)
     def publish_post(self):
         start = time.time()
         try:
@@ -304,7 +332,7 @@ class PublishingManager:
             self.human_delay(30, 50)
             tags = self.engine.base_tags + self.engine.generate_trending_tags()
             content = self.engine.format_post_content(ai_content)
-            logger.info("🚀 Publishing...")
+            logger.info("🚀 Publishing to Tumblr...")
             response = self.engine.clients.retry_with_smart_backoff(lambda: self.engine.clients.tumblr_client.create_photo(blogname=self.engine.blog_url, state="published", tags=tags, caption=content, source=image_url, format="html"), "Tumblr", Config.TUMBLR_MAX_RETRIES)
             post_id = response.get('id', 'unknown')
             duration = time.time() - start
@@ -318,7 +346,7 @@ class PublishingManager:
             return post_data
         except Exception as e:
             duration = time.time() - start
-            logger.error(f"❌ Failed: {e}")
+            logger.error(f"❌ Publishing failed after {duration:.1f}s: {e}")
             import traceback
             self.db.log_error('publish_failed', str(e), traceback.format_exc())
             metrics.record_publish_failure()
@@ -336,24 +364,27 @@ class PostScheduler:
     def __init__(self, publisher: PublishingManager, db_manager: DatabaseManager):
         self.publisher = publisher
         self.db = db_manager
-        jobstores = {'default': SQLAlchemyJobStore(url=f'sqlite:///{Config.DB_PATH}')}
+        jobstores = {'default': MemoryJobStore()}
         self.scheduler = BackgroundScheduler(jobstores=jobstores)
         self.scheduler.start()
-        logger.info("✅ Scheduler initialized")
+        logger.info("✅ Scheduler initialized (Memory jobstore)")
     def schedule_next_post(self):
         try:
             self.scheduler.remove_all_jobs()
             delay, next_time = self.publisher.calculate_next_post_time()
             self.scheduler.add_job(func=self.execute_post_job, trigger='interval', seconds=delay, id='post_job', replace_existing=True)
-            logger.info(f"📅 Next: {next_time.strftime('%H:%M:%S')} ({delay // 60}min)")
+            logger.info(f"📅 Next post: {next_time.strftime('%Y-%m-%d %H:%M:%S')} ({delay // 60} minutes)")
             self.db.update_state('next_post_time', next_time.isoformat())
         except Exception as e:
-            logger.error(f"Schedule error: {e}")
+            logger.error(f"❌ Schedule error: {e}")
     def execute_post_job(self):
         logger.info("=" * 60)
-        logger.info("🎬 Post job")
+        logger.info("🎬 Executing scheduled post job")
         result = self.publisher.publish_post()
-        logger.info(f"🎉 Success: {result['title']}" if result['success'] else f"❌ Failed: {result.get('error')}")
+        if result['success']:
+            logger.info(f"🎉 Success: {result['title']}")
+        else:
+            logger.error(f"❌ Failed: {result.get('error')}")
         self.schedule_next_post()
         logger.info("=" * 60)
     def start(self):
@@ -362,6 +393,149 @@ class PostScheduler:
 app = Flask(__name__)
 db_manager = publisher = scheduler = None
 start_time = time.time()
+
+MOBILE_POST_HTML = '''
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Post Now - She Cooks Bakes</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            max-width: 600px;
+            margin: 0 auto;
+            padding: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+        }
+        .container {
+            background: white;
+            border-radius: 15px;
+            padding: 30px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+        }
+        h1 {
+            color: #2c3e50;
+            text-align: center;
+            margin-bottom: 10px;
+        }
+        .subtitle {
+            text-align: center;
+            color: #7f8c8d;
+            margin-bottom: 30px;
+        }
+        button {
+            width: 100%;
+            padding: 15px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 18px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+        button:active {
+            transform: translateY(0);
+        }
+        button:disabled {
+            background: #95a5a6;
+            cursor: not-allowed;
+        }
+        .result {
+            margin-top: 20px;
+            padding: 15px;
+            border-radius: 8px;
+            display: none;
+        }
+        .success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        .error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        .loading {
+            text-align: center;
+            color: #667eea;
+            font-weight: bold;
+        }
+        .info {
+            background: #e8f4f8;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            border-left: 4px solid #667eea;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🍰 She Cooks Bakes AI</h1>
+        <p class="subtitle">Manual Post Trigger</p>
+        
+        <div class="info">
+            <strong>ℹ️ Info:</strong> This will create and publish a new blog post immediately.
+        </div>
+        
+        <button onclick="triggerPost()" id="postBtn">🚀 Publish Now</button>
+        
+        <div id="result" class="result"></div>
+    </div>
+    
+    <script>
+        function triggerPost() {
+            const btn = document.getElementById('postBtn');
+            const result = document.getElementById('result');
+            
+            btn.disabled = true;
+            btn.textContent = '⏳ Publishing...';
+            result.style.display = 'block';
+            result.className = 'result loading';
+            result.textContent = 'Creating your post... This may take 1-2 minutes.';
+            
+            fetch('/post-now', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'}
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.result && data.result.success) {
+                    result.className = 'result success';
+                    result.innerHTML = `
+                        <strong>✅ Success!</strong><br>
+                        <strong>Title:</strong> ${data.result.title}<br>
+                        <strong>Post ID:</strong> ${data.result.post_id}<br>
+                        <strong>Blog:</strong> <a href="https://${data.result.tags ? 'she-cooks-bakes.tumblr.com' : ''}" target="_blank">View on Tumblr</a>
+                    `;
+                } else {
+                    result.className = 'result error';
+                    result.innerHTML = `<strong>❌ Error:</strong> ${data.result ? data.result.error : 'Unknown error'}`;
+                }
+                btn.disabled = false;
+                btn.textContent = '🚀 Publish Now';
+            })
+            .catch(error => {
+                result.className = 'result error';
+                result.textContent = '❌ Network error: ' + error;
+                btn.disabled = false;
+                btn.textContent = '🚀 Publish Now';
+            });
+        }
+    </script>
+</body>
+</html>
+'''
 
 @app.route('/')
 def home():
@@ -385,11 +559,15 @@ def stats():
 
 @app.route('/post-now', methods=['GET', 'POST'])
 def manual_post():
+    if request.method == 'GET':
+        return render_template_string(MOBILE_POST_HTML)
     try:
+        logger.info("🔧 Manual post triggered via " + request.method)
         result = publisher.publish_post()
         scheduler.schedule_next_post()
         return jsonify({"manual_trigger": True, "result": result})
     except Exception as e:
+        logger.error(f"Manual post error: {e}")
         return jsonify({"error": str(e)}), 500
 
 @app.route('/backup', methods=['POST'])
@@ -404,45 +582,51 @@ class SelfPingService:
         self.url = os.getenv('RENDER_EXTERNAL_URL', f'http://localhost:{Config.FLASK_PORT}')
         if Config.SELF_PING_ENABLED:
             threading.Thread(target=self._ping_loop, daemon=True).start()
-            logger.info("💓 Self-ping started")
+            logger.info("💓 Self-ping service started")
     def _ping_loop(self):
         while True:
             time.sleep(Config.SELF_PING_INTERVAL)
-            try: requests.get(f"{self.url}/health", timeout=10)
-            except: pass
+            try: 
+                requests.get(f"{self.url}/health", timeout=10)
+                logger.debug("💓 Self-ping successful")
+            except: 
+                pass
 
 def main():
     global db_manager, publisher, scheduler
     try:
         logger.info("=" * 60)
         logger.info(f"🚀 {Config.APP_NAME} v{Config.VERSION}")
+        logger.info(f"⏰ Started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         logger.info("=" * 60)
         EnvironmentValidator.validate()
-        logger.info("💾 Database...")
+        logger.info("💾 Initializing database...")
         db_manager = DatabaseManager()
-        logger.info("🔌 API clients...")
+        logger.info("🔌 Initializing API clients...")
         api_clients = APIClients()
-        logger.info("🎨 Content engine...")
+        logger.info("🎨 Initializing content engine...")
         content_engine = ContentEngine(api_clients, db_manager)
-        logger.info("📤 Publisher...")
+        logger.info("📤 Initializing publisher...")
         publisher = PublishingManager(content_engine, db_manager)
-        logger.info("⏰ Scheduler...")
+        logger.info("⏰ Initializing scheduler (Memory-based)...")
         scheduler = PostScheduler(publisher, db_manager)
-        logger.info("💓 Self-ping...")
+        logger.info("💓 Starting self-ping service...")
         SelfPingService()
-        logger.info("🎬 Starting...")
+        logger.info("🎬 Starting scheduler...")
         scheduler.start()
-        logger.info(f"🌐 Waitress WSGI on :{Config.FLASK_PORT}")
+        logger.info(f"🌐 Starting Waitress WSGI server on port {Config.FLASK_PORT}...")
         logger.info("=" * 60)
-        logger.info("✅ OPERATIONAL!")
+        logger.info("✅ SYSTEM FULLY OPERATIONAL!")
+        logger.info("=" * 60)
+        logger.info("📱 Mobile posting: https://your-app.onrender.com/post-now")
         logger.info("=" * 60)
         serve(app, host=Config.FLASK_HOST, port=Config.FLASK_PORT, threads=4, channel_timeout=60, cleanup_interval=30, _quiet=False)
     except KeyboardInterrupt:
-        logger.info("⏹️ Shutdown...")
+        logger.info("⏹️ Shutting down gracefully...")
         if scheduler: scheduler.scheduler.shutdown()
         sys.exit(0)
     except Exception as e:
-        logger.critical(f"💥 Critical: {e}")
+        logger.critical(f"💥 Critical error: {e}")
         import traceback
         traceback.print_exc()
         sys.exit(1)
