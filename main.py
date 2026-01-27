@@ -11,7 +11,7 @@ from typing import Dict, Optional, List, Tuple
 from contextlib import contextmanager
 from collections import deque
 from waitress import serve
-from flask import Flask, jsonify, render_template_string
+from flask import Flask, jsonify, render_template_string, request
 from openai import OpenAI, APIError, RateLimitError, APIConnectionError
 import pytumblr
 from apscheduler.schedulers.background import BackgroundScheduler
