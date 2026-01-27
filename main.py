@@ -40,7 +40,7 @@ class Config:
     OPENAI_RATE_LIMIT_PAUSE = 90
     SELF_PING_ENABLED = True
     SELF_PING_INTERVAL = 840
-    BLOG_URL = "she-cooks-bakes.tumblr.com"
+    BLOG_URL = "shecooksandbakes.tumblr.com"
     BLOG_WEBSITE = "https://shecooksbakes.blogspot.com/p/header-footer-nav.html"
     LOG_FILE = "she_cooks_bakes.log"
     LOG_MAX_BYTES = 5 * 1024 * 1024
