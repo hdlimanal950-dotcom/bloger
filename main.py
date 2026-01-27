@@ -383,7 +383,7 @@ def stats():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-@app.route('/post-now', methods=['POST'])
+@app.route('/post-now', methods=['GET', 'POST'])
 def manual_post():
     try:
         result = publisher.publish_post()
