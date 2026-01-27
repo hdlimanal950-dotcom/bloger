@@ -1,15 +1,39 @@
-flask==3.0.0
+# She Cooks Bakes AI v4.1.0
+# Python 3.10+
+
+# Web Framework
+Flask==3.0.0
 Werkzeug==3.0.1
-pytumblr==0.1.2
+
+# Production WSGI Server (fixes Render deployment)
+waitress==2.1.2
+
+# Tumblr API
+PyTumblr==0.1.2
 oauth2==1.9.0.post1
+
+# OpenAI API (Latest SDK)
 openai==1.7.1
-Pillow>=10.2.0
+
+# Image Processing
+Pillow==10.1.0
+
+# HTTP Requests
 requests==2.31.0
 urllib3==2.1.0
+
+# Scheduling with Persistence
 APScheduler==3.10.4
 SQLAlchemy==2.0.23
+
+# Time and Date
 pytz==2023.3
+
+# Environment Variables
 python-dotenv==1.0.0
+
+# Security
 certifi==2023.11.17
+
+# Utilities
 six==1.16.0
-gunicorn==21.2.0
