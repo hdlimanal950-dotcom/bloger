@@ -3,7 +3,7 @@
 She Cooks Bakes AI v5.0.0
 ✅ NEW: Google Gemini AI (Free tier, unlimited creativity)
 ✅ NEW: Smart hashtag system (2 AI-generated + global tags)
-✅ NEW: Dynamic Image System (Unique image per recipe)
+✅ NEW: Topic-Relevant Image System (No random images)
 ✅ Fixed: All previous issues (Scheduler, Mobile, Rate limits)
 """
 import os, sys, json, time, random, logging, sqlite3, requests, threading, shutil
@@ -257,6 +257,83 @@ class ContentEngine:
         self.db = db_manager
         self.blog_url = Config.BLOG_URL
         self.base_tags = ["Baking", "DessertRecipes", "CookingTips", "HomeBaking", "SweetTreats", "RecipeIdeas", "FoodBlog", "DeliciousDesserts", "BakingLove"]
+        
+        # Topic-to-Keyword mapping for relevant images
+        self.topic_keywords = {
+            # Cakes & Desserts
+            "Chocolate Lava Cake": ["chocolate", "cake", "dessert", "molten"],
+            "French Macarons": ["macarons", "french", "pastry", "colorful"],
+            "Red Velvet Cupcakes": ["red velvet", "cupcakes", "cream cheese"],
+            "Professional Cheesecake": ["cheesecake", "new york", "dessert"],
+            "Black Forest Cake": ["black forest", "chocolate", "cherry", "cake"],
+            "Apple Strudel": ["apple strudel", "pastry", "austrian", "baking"],
+            "Custard Tarts": ["custard", "tarts", "egg", "pastry"],
+            "Chocolate Fondue": ["chocolate", "fondue", "dipping", "fruit"],
+            "Cinnamon Rolls": ["cinnamon rolls", "breakfast", "pastry", "sweet"],
+            "Lemon Pie": ["lemon", "pie", "citrus", "dessert"],
+            "Carrot Cake": ["carrot cake", "cream cheese", "spice", "walnut"],
+            "Brownies": ["brownies", "chocolate", "fudge", "dessert"],
+            "Banana Bread": ["banana bread", "loaf", "breakfast", "baking"],
+            
+            # Breads & Pastries
+            "Artisan Bread": ["artisan bread", "crusty", "bakery", "loaf"],
+            "French Croissants": ["croissants", "french", "buttery", "pastry"],
+            "British Scones": ["scones", "british", "tea", "clotted cream"],
+            "Danish Pastries": ["danish pastry", "breakfast", "butter", "layered"],
+            
+            # International Desserts
+            "Baklava": ["baklava", "greek", "honey", "nuts", "phyllo"],
+            "Japanese Mochi": ["mochi", "japanese", "rice cake", "sweet"],
+            "Turkish Delight": ["turkish delight", "lokum", "powdered sugar"],
+            "Portuguese Pastel de Nata": ["pastel de nata", "portuguese", "custard", "tart"],
+            "Italian Tiramisu": ["tiramisu", "italian", "coffee", "mascarpone"],
+            "Spanish Churros": ["churros", "spanish", "fried", "cinnamon sugar"],
+            
+            # Drinks & Beverages
+            "Matcha Desserts": ["matcha", "green tea", "japanese", "powder"],
+            
+            # Pizzas & Savory
+            "Italian Pizza Margherita": ["pizza margherita", "italian", "tomato", "mozzarella", "basil"],
+            "Neapolitan Pizza": ["neapolitan pizza", "wood fired", "italian"],
+            
+            # Asian Cuisine
+            "Japanese Ramen": ["ramen", "japanese", "noodles", "broth", "pork"],
+            "Thai Green Curry": ["thai green curry", "coconut milk", "spicy", "herbs"],
+            "Vietnamese Pho": ["pho", "vietnamese", "noodle soup", "beef", "herbs"],
+            "Korean Bibimbap": ["bibimbap", "korean", "rice bowl", "vegetables", "egg"],
+            "Chinese Dim Sum": ["dim sum", "chinese", "dumplings", "steamed"],
+            
+            # Add more mappings for other topics...
+        }
+        
+        # Fallback images by category
+        self.fallback_images = {
+            "cake": [
+                "https://images.unsplash.com/photo-1578985545062-69928b1d9587",
+                "https://images.pexels.com/photos/291528/pexels-photo-291528.jpeg"
+            ],
+            "bread": [
+                "https://images.unsplash.com/photo-1549931319-a545dcf3bc73",
+                "https://images.pexels.com/photos/227432/pexels-photo-227432.jpeg"
+            ],
+            "dessert": [
+                "https://images.unsplash.com/photo-1558961363-fa8fdf82db35",
+                "https://images.pexels.com/photos/14107/pexels-photo-14107.jpeg"
+            ],
+            "pizza": [
+                "https://images.unsplash.com/photo-1565299624946-b28f40a0ae38",
+                "https://images.pexels.com/photos/806363/pexels-photo-806363.jpeg"
+            ],
+            "asian": [
+                "https://images.unsplash.com/photo-1552611052-33b04c8c17c6",
+                "https://images.pexels.com/photos/1092730/pexels-photo-1092730.jpeg"
+            ],
+            "drink": [
+                "https://images.unsplash.com/photo-1513558161293-cdaf765ed2fd",
+                "https://images.unsplash.com/photo-1551024709-8f23befc6f87"
+            ]
+        }
+        
     def generate_recipe_topic(self):
         topics = [
             "Chocolate Lava Cake", "French Macarons", "Artisan Bread", "Italian Tiramisu", "Red Velvet Cupcakes",
@@ -314,6 +391,112 @@ class ContentEngine:
         topic = random.choice(available)
         self.db.add_to_topic_cache(topic)
         return topic
+    
+    def _get_topic_category(self, topic: str) -> str:
+        """Determine the category of a topic for relevant image selection"""
+        topic_lower = topic.lower()
+        
+        if any(word in topic_lower for word in ["cake", "cupcake", "cheesecake", "brownie", "pie", "tart", "dessert", "sweet"]):
+            return "cake"
+        elif any(word in topic_lower for word in ["bread", "croissant", "scone", "pastry", "bun", "roll"]):
+            return "bread"
+        elif any(word in topic_lower for word in ["pizza", "pasta", "lasagna", "risotto"]):
+            return "pizza"
+        elif any(word in topic_lower for word in ["ramen", "sushi", "curry", "pho", "dim sum", "asian", "japanese", "thai", "chinese", "korean"]):
+            return "asian"
+        elif any(word in topic_lower for word in ["drink", "coffee", "tea", "smoothie", "juice", "cocktail", "beverage"]):
+            return "drink"
+        else:
+            return "dessert"  # default category
+    
+    def _get_relevant_keywords(self, topic: str) -> List[str]:
+        """Get relevant keywords for a topic"""
+        # First check if we have predefined keywords
+        if topic in self.topic_keywords:
+            return self.topic_keywords[topic]
+        
+        # Extract keywords from the topic name
+        words = topic.lower().split()
+        relevant = []
+        
+        # Add main topic words
+        relevant.extend(words[:2])
+        
+        # Add category-based words
+        category = self._get_topic_category(topic)
+        if category == "cake":
+            relevant.extend(["cake", "dessert", "baking"])
+        elif category == "bread":
+            relevant.extend(["bread", "baking", "artisan"])
+        elif category == "pizza":
+            relevant.extend(["pizza", "italian", "cheese"])
+        elif category == "asian":
+            relevant.extend(["asian", "food", "cuisine"])
+        elif category == "drink":
+            relevant.extend(["drink", "beverage", "refreshment"])
+        else:
+            relevant.extend(["food", "recipe", "cooking"])
+        
+        return list(dict.fromkeys(relevant))[:4]  # Remove duplicates and limit
+    
+    def generate_topic_relevant_image(self, topic: str):
+        """Generate an image URL that's relevant to the topic"""
+        try:
+            # Get relevant keywords for this topic
+            keywords = self._get_relevant_keywords(topic)
+            
+            # Generate a random seed for variety
+            random_seed = random.randint(1000, 9999)
+            timestamp = int(time.time())
+            
+            # Create search query from keywords
+            query = ",".join(keywords)
+            
+            # List of image APIs that support search by keyword
+            image_apis = [
+                # Unsplash with topic-specific search
+                f"https://source.unsplash.com/featured/1200x800/?{query}&sig={random_seed}",
+                
+                # More specific searches
+                f"https://source.unsplash.com/featured/1200x800/?food,{query}&sig={random_seed + 1}",
+                
+                # Category-based search
+                f"https://source.unsplash.com/featured/1200x800/?cooking,{keywords[0] if keywords else 'food'}&sig={random_seed + 2}",
+                
+                # High-quality food images
+                f"https://images.unsplash.com/photo-1565958011703-44f9829ba187?ixlib=rb-1.2.1&auto=format&fit=crop&w=1200&h=800&q=80&crop=entropy&cs=tinysrgb&sig={random_seed}",
+                
+                # Baking-specific if relevant
+                f"https://source.unsplash.com/featured/1200x800/?baking,{keywords[0] if keywords else 'dessert'}&sig={random_seed + 3}",
+            ]
+            
+            # Select API based on topic hash for consistency
+            topic_hash = hash(topic) % len(image_apis)
+            selected_api = image_apis[topic_hash]
+            
+            # Add timestamp to prevent caching
+            image_url = f"{selected_api}&t={timestamp}"
+            
+            logger.info(f"📸 Generated relevant image for '{topic}' with keywords: {keywords}")
+            return image_url
+            
+        except Exception as e:
+            logger.warning(f"⚠️ Relevant image generation failed: {e}")
+            # Fallback to category-specific images
+            return self._get_category_fallback_image(topic)
+    
+    def _get_category_fallback_image(self, topic: str) -> str:
+        """Get a fallback image based on topic category"""
+        category = self._get_topic_category(topic)
+        fallback_list = self.fallback_images.get(category, self.fallback_images["dessert"])
+        
+        # Select random image from category
+        image_url = random.choice(fallback_list)
+        
+        # Add timestamp to prevent caching
+        timestamp = int(time.time())
+        return f"{image_url}?t={timestamp}"
+    
     def generate_ai_content_with_hashtags(self, topic: str):
         def _generate():
             prompt = f'''Create a professional blog post about "{topic}" for a cooking and baking blog.
@@ -393,66 +576,6 @@ IMPORTANT: Return ONLY valid JSON, no extra text.'''
         final_tags.extend(self.base_tags[:5])
         return list(dict.fromkeys(final_tags))[:15]
     
-    def generate_dynamic_image(self, topic: str):
-        """Generate a unique image URL based on the recipe topic"""
-        try:
-            # Clean the topic for URL use
-            clean_topic = topic.lower().replace(' ', '-').replace("'", '').replace('"', '')[:30]
-            
-            # Generate a unique random number to prevent caching
-            random_seed = random.randint(1000, 9999)
-            
-            # List of high-quality food image APIs with dynamic parameters
-            image_apis = [
-                # Pexels API with search parameter
-                f"https://images.pexels.com/photos/1{random_seed}/pexels-photo-1{random_seed}.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940&fit=crop&crop=focalpoint&fp-x=0.5&fp-y=0.5",
-                
-                # Unsplash API with food category and random
-                f"https://source.unsplash.com/featured/1200x800/?food,{clean_topic}&sig={random_seed}",
-                
-                # Placeholder with food styling
-                f"https://images.unsplash.com/photo-1490818387583-1baba5e638af?ixlib=rb-1.2.1&auto=format&fit=crop&w=1200&h=800&q=80&crop=entropy&cs=tinysrgb&sig={random_seed}",
-                
-                # Pexels food collection
-                f"https://images.pexels.com/photos/2{random_seed}/pexels-photo-2{random_seed}.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
-                
-                # Another Unsplash variant
-                f"https://source.unsplash.com/1200x800/?cooking,{clean_topic}&sig={random_seed + 1}",
-                
-                # Food focus with different parameters
-                f"https://images.unsplash.com/photo-1565958011703-44f9829ba187?ixlib=rb-1.2.1&auto=format&fit=crop&w=1200&h=800&q=80&sig={random_seed + 2}",
-                
-                # Baking specific
-                f"https://source.unsplash.com/featured/1200x800/?baking,{clean_topic}&sig={random_seed + 3}",
-                
-                # Dessert specific
-                f"https://images.pexels.com/photos/3{random_seed}/pexels-photo-3{random_seed}.jpeg?auto=compress&cs=tinysrgb&dpr=2&w=1200&h=800&fit=crop"
-            ]
-            
-            # Select API based on topic hash for consistency
-            topic_hash = hash(topic) % len(image_apis)
-            selected_api = image_apis[topic_hash]
-            
-            # Add timestamp to prevent any caching
-            timestamp = int(time.time())
-            image_url = f"{selected_api}&t={timestamp}"
-            
-            logger.info(f"📸 Generated dynamic image for '{topic}'")
-            return image_url
-            
-        except Exception as e:
-            logger.warning(f"⚠️ Dynamic image generation failed, using fallback: {e}")
-            # Fallback to a reliable food image with random parameter
-            fallback_urls = [
-                "https://images.pexels.com/photos/291528/pexels-photo-291528.jpeg",
-                "https://images.pexels.com/photos/227432/pexels-photo-227432.jpeg",
-                "https://images.pexels.com/photos/14107/pexels-photo-14107.jpeg",
-                "https://images.unsplash.com/photo-1486427944299-d1955d23e34d",
-                "https://images.unsplash.com/photo-1578985545062-69928b1d9587"
-            ]
-            random_index = random.randint(0, len(fallback_urls) - 1)
-            return f"{fallback_urls[random_index]}?t={int(time.time())}"
-    
     def format_post_content(self, ai_content: Dict):
         ingredients = "".join([f'<li>{i}</li>' for i in ai_content['ingredients']])
         tips = "".join([f'<li>{t}</li>' for t in ai_content['tips']])
@@ -488,8 +611,8 @@ class PublishingManager:
             ai_content = self.engine.generate_ai_content_with_hashtags(topic)
             logger.info(f"🏷️ Custom hashtags: {ai_content.get('custom_hashtags', [])}")
             self.human_delay(20, 40)
-            logger.info("🎨 Generating dynamic image...")
-            image_url = self.engine.generate_dynamic_image(topic)
+            logger.info("🎨 Generating topic-relevant image...")
+            image_url = self.engine.generate_topic_relevant_image(topic)
             self.human_delay(30, 50)
             final_tags = self.engine.generate_final_hashtags(ai_content.get('custom_hashtags', []))
             logger.info(f"🏷️ Final tags ({len(final_tags)}): {', '.join(final_tags[:5])}...")
@@ -653,7 +776,7 @@ def main():
         logger.info("=" * 60)
         logger.info(f"🚀 {Config.APP_NAME} v{Config.VERSION}")
         logger.info(f"🤖 AI Engine: Google Gemini (Free & Unlimited)")
-        logger.info(f"📸 Image System: Dynamic (Unique per recipe)")
+        logger.info(f"📸 Image System: Topic-Relevant (No random images)")
         logger.info(f"⏰ Started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         logger.info("=" * 60)
         EnvironmentValidator.validate()
@@ -677,7 +800,7 @@ def main():
         logger.info("=" * 60)
         logger.info("📱 Mobile posting: https://your-app.onrender.com/post-now")
         logger.info("🏷️ Hashtag system: 2 AI-generated + global tags")
-        logger.info("📸 Image system: Dynamic per recipe (No repetition)")
+        logger.info("📸 Image system: Topic-relevant (Cake → Cake image, Pizza → Pizza image)")
         logger.info("=" * 60)
         serve(app, host=Config.FLASK_HOST, port=Config.FLASK_PORT, threads=4, channel_timeout=60, cleanup_interval=30, _quiet=False)
     except KeyboardInterrupt:
