@@ -260,7 +260,54 @@ class ContentEngine:
         self.current_source = 'pexels'
         self.image_index = 0
     def generate_recipe_topic(self):
-        topics = ["Chocolate Lava Cake", "French Macarons", "Artisan Bread", "Italian Tiramisu", "Red Velvet Cupcakes", "Vegan Cookies", "Professional Cheesecake", "Baklava", "Matcha Desserts", "American Pancakes", "Belgian Truffles", "French Croissants", "New York Cheesecake", "Italian Cannoli", "Spanish Churros", "British Scones", "Black Forest Cake", "Apple Strudel", "Custard Tarts", "Chocolate Fondue", "Cinnamon Rolls", "Lemon Pie", "Carrot Cake", "Brownies", "Banana Bread"]
+        topics = [
+            "Chocolate Lava Cake", "French Macarons", "Artisan Bread", "Italian Tiramisu", "Red Velvet Cupcakes",
+            "Vegan Cookies", "Professional Cheesecake", "Baklava", "Matcha Desserts", "American Pancakes",
+            "Belgian Truffles", "French Croissants", "New York Cheesecake", "Italian Cannoli", "Spanish Churros",
+            "British Scones", "Black Forest Cake", "Apple Strudel", "Custard Tarts", "Chocolate Fondue",
+            "Cinnamon Rolls", "Lemon Pie", "Carrot Cake", "Brownies", "Banana Bread",
+            "Japanese Mochi", "Turkish Delight", "Greek Baklava", "Portuguese Pastel de Nata", "Austrian Apfelstrudel",
+            "Swiss Chocolate Truffles", "Danish Pastries", "Swedish Princess Cake", "Polish Paczki", "Hungarian Dobos Torte",
+            "Russian Honey Cake", "Indian Gulab Jamun", "Indian Butter Chicken", "Japanese Ramen", "Thai Green Curry",
+            "Vietnamese Pho", "Korean Bibimbap", "Chinese Dim Sum", "Mexican Tacos", "Italian Pizza Margherita",
+            "French Coq au Vin", "Spanish Paella", "Greek Moussaka", "Turkish Kebabs", "Lebanese Hummus",
+            "Moroccan Tagine", "Ethiopian Injera", "American BBQ Ribs", "Canadian Poutine", "Australian Meat Pie",
+            "Brazilian Feijoada", "Argentinian Empanadas", "Peruvian Ceviche", "Chilean Pastel de Choclo", "Colombian Arepas",
+            "Jamaican Jerk Chicken", "Cuban Sandwich", "Puerto Rican Mofongo", "Dominican Mangú", "Haitian Griot",
+            "Nigerian Jollof Rice", "South African Bobotie", "Egyptian Koshari", "Israeli Falafel", "Palestinian Maqluba",
+            "Iranian Chelow Kabab", "Saudi Arabian Kabsa", "Emirati Shawarma", "Qatari Machboos", "Omani Shuwa",
+            "Pakistani Biryani", "Bangladeshi Hilsa Curry", "Sri Lankan Kottu Roti", "Nepali Momo", "Bhutanese Ema Datshi",
+            "Burmese Mohinga", "Thai Tom Yum Goong", "Cambodian Fish Amok", "Laotian Larb", "Indonesian Rendang",
+            "Malaysian Nasi Lemak", "Singaporean Chili Crab", "Filipino Adobo", "Vietnamese Banh Mi", "Korean Kimchi",
+            "Japanese Sushi", "Chinese Peking Duck", "Mongolian Buuz", "Taiwanese Beef Noodle Soup", "Hong Kong Egg Waffles",
+            "Macanese Egg Tarts", "Tibetan Thukpa", "Uzbek Plov", "Kazakh Beshbarmak", "Kyrgyz Laghman",
+            "Georgian Khachapuri", "Armenian Lahmajoun", "Azerbaijani Plov", "Turkish Menemen", "Cypriot Halloumi",
+            "Maltese Pastizzi", "Icelandic Hangikjöt", "Norwegian Rakfisk", "Swedish Meatballs", "Finnish Karjalanpiirakka",
+            "Danish Smørrebrød", "Dutch Stroopwafel", "Belgian Waffles", "German Pretzels", "Swiss Fondue",
+            "Austrian Wiener Schnitzel", "Czech Trdelník", "Slovak Bryndzové Halušky", "Polish Pierogi", "Hungarian Goulash",
+            "Romanian Sarmale", "Bulgarian Banitsa", "Serbian Ćevapi", "Croatian Peka", "Bosnian Burek",
+            "Albanian Byrek", "Greek Souvlaki", "Macedonian Tavče Gravče", "Montenegrin Kačamak", "Slovenian Potica",
+            "Italian Risotto", "French Ratatouille", "Spanish Gazpacho", "Portuguese Bacalhau", "British Fish and Chips",
+            "Irish Stew", "Scottish Haggis", "Welsh Cawl", "Cornish Pasty", "Manx Kippers",
+            "Guernsey Gâche", "Jersey Bean Crock", "Sicilian Cannoli", "Sardinian Porceddu", "Neapolitan Pizza",
+            "Tuscan Ribollita", "Venetian Risotto", "Roman Carbonara", "Milanese Osso Buco", "Bolognese Tagliatelle",
+            "Florentine Bistecca", "Genovese Pesto", "Calabrian 'Nduja", "Puglian Orecchiette", "Abruzzese Arrosticini",
+            "Basque Cheesecake", "Catalan Crema Catalana", "Andalusian Salmorejo", "Galician Pulpo a la Gallega", "Asturian Fabada",
+            "Valencian Horchata", "Balearic Ensaimada", "Canarian Papas Arrugadas", "Extremaduran Migas", "La Riojan Patatas a la Riojana",
+            "Navarran Chilindrón", "Aragonese Pollo al Chilindrón", "Cantabrian Cocido Lebaniego", "Murcian Caldero", "Castilian Cochinillo",
+            "Leonese Cecina", "Manchego Pisto", "Madrilenian Cocido Madrileño", "Rojan Patatas Bravas", "Andorran Escudella",
+            "Monégasque Barbagiuan", "San Marinese Torta Tre Monti", "Vatican Swiss Guard Recipes", "Liechtensteiner Käsknöpfle",
+            "Luxembourdish Bouneschlupp", "Monegasque Fougasse", "Alsatian Choucroute", "Breton Crêpes", "Provençal Tapenade",
+            "Normandie Tarte Tatin", "Bordeaux Canelé", "Burgundy Coq au Vin", "Champagne Sabayon", "Dijon Mustard Recipes",
+            "Lyon Quenelle", "Marseille Bouillabaisse", "Nice Salade Niçoise", "Toulouse Cassoulet", "Strasbourg Flammekueche",
+            "Reims Biscuit Rose", "Montpellier Brandade", "Nantes Galette Nantaise", "Bordeaux Éclair", "Lille Welsh",
+            "Rouen Canard à la Rouennaise", "Amiens Ficelle Picarde", "Tours Rillettes", "Angers Crémant", "Brest Kig ha Farz",
+            "Cherbourg Teurgoule", "Dunkerque Waterzooi", "Grenoble Gratin Dauphinois", "Limoges Pâté de Pommes de Terre", "Metz Mirabelle Tart",
+            "Mullette Baeckeoffe", "Nancy Macarons", "Orléans Cotignac", "Poitiers Farci Poitevin", "Quimper Crêpe Bretonne",
+            "Saint-Étienne Rapée", "Toulon Tarte Tropezienne", "Troyes Andouillette", "Valence Pogne", "Vannes Kouign-Amann",
+            "Versailles Petit Four", "Épinal Baba au Rhum", "Ajaccio Aziminu", "Bastia Stufatu", "Calvi Tiramisu",
+            "Corte Fiadone", "Sartène Coppa", "Porto-Vecchio Canistrelli", "Bastelicaccia Figatellu", "L'Île-Rousse Panzetta"
+        ]
         recent = self.db.get_recent_topics(Config.TOPIC_CACHE_SIZE)
         available = [t for t in topics if t not in recent]
         if not available: 
