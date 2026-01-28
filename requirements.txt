@@ -1,9 +1,15 @@
 Flask
+Werkzeug
 waitress
 PyTumblr
-openai
+oauth2
+google-generativeai
 Pillow
 requests
+urllib3
 APScheduler
+SQLAlchemy
 pytz
 python-dotenv
+certifi
+six
