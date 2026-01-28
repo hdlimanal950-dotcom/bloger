@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
-She Cooks Bakes AI v5.0.0
+She Cooks Bakes AI v5.1.0
 ✅ NEW: Google Gemini AI (Free tier, unlimited creativity)
 ✅ NEW: Smart hashtag system (2 AI-generated + global tags)
-✅ NEW: Topic-Relevant Image System (No random images)
+✅ NEW: Complete Recipe Content (Full ingredients & steps)
+✅ NEW: High-Quality Unsplash Images (Smart keyword search)
 ✅ Fixed: All previous issues (Scheduler, Mobile, Rate limits)
 """
 import os, sys, json, time, random, logging, sqlite3, requests, threading, shutil
@@ -21,7 +22,7 @@ from logging.handlers import RotatingFileHandler
 
 class Config:
     APP_NAME = "She Cooks Bakes AI"
-    VERSION = "5.0.0"
+    VERSION = "5.1.0"
     ENVIRONMENT = os.getenv("ENVIRONMENT", "production")
     FLASK_HOST = "0.0.0.0"
     FLASK_PORT = int(os.getenv("PORT", 10000))
@@ -48,6 +49,7 @@ class Config:
     LOG_BACKUP_COUNT = 3
     METRICS_ENABLED = True
     GLOBAL_HASHTAGS = ["Food", "Recipe", "Cooking", "Chef", "Yummy", "InstaFood", "Delicious", "Foodie", "HomeCooking", "FoodLover"]
+    UNSPLASH_ACCESS_KEY = os.getenv("UNSPLASH_ACCESS_KEY", "")  # Optional for better results
 
 def setup_logging():
     logger = logging.getLogger(Config.APP_NAME)
@@ -258,81 +260,66 @@ class ContentEngine:
         self.blog_url = Config.BLOG_URL
         self.base_tags = ["Baking", "DessertRecipes", "CookingTips", "HomeBaking", "SweetTreats", "RecipeIdeas", "FoodBlog", "DeliciousDesserts", "BakingLove"]
         
-        # Topic-to-Keyword mapping for relevant images
-        self.topic_keywords = {
+        # Smart keyword mapping for Unsplash search
+        self.topic_keyword_map = {
             # Cakes & Desserts
-            "Chocolate Lava Cake": ["chocolate", "cake", "dessert", "molten"],
-            "French Macarons": ["macarons", "french", "pastry", "colorful"],
-            "Red Velvet Cupcakes": ["red velvet", "cupcakes", "cream cheese"],
-            "Professional Cheesecake": ["cheesecake", "new york", "dessert"],
-            "Black Forest Cake": ["black forest", "chocolate", "cherry", "cake"],
-            "Apple Strudel": ["apple strudel", "pastry", "austrian", "baking"],
-            "Custard Tarts": ["custard", "tarts", "egg", "pastry"],
-            "Chocolate Fondue": ["chocolate", "fondue", "dipping", "fruit"],
-            "Cinnamon Rolls": ["cinnamon rolls", "breakfast", "pastry", "sweet"],
-            "Lemon Pie": ["lemon", "pie", "citrus", "dessert"],
-            "Carrot Cake": ["carrot cake", "cream cheese", "spice", "walnut"],
-            "Brownies": ["brownies", "chocolate", "fudge", "dessert"],
-            "Banana Bread": ["banana bread", "loaf", "breakfast", "baking"],
+            "cake": ["cake", "dessert", "sweet", "baking", "frosting", "layered cake"],
+            "cheesecake": ["cheesecake", "new york cheesecake", "cream cheese dessert"],
+            "chocolate": ["chocolate", "chocolate dessert", "cocoa", "chocolate cake"],
+            "cupcake": ["cupcakes", "frosted cupcakes", "baking", "party dessert"],
+            "pie": ["pie", "fruit pie", "pastry", "dessert pie"],
+            "brownie": ["brownies", "chocolate brownies", "fudgy dessert"],
+            "cookie": ["cookies", "baked cookies", "chocolate chip cookies"],
+            "macaron": ["macarons", "french macarons", "colorful macarons"],
             
             # Breads & Pastries
-            "Artisan Bread": ["artisan bread", "crusty", "bakery", "loaf"],
-            "French Croissants": ["croissants", "french", "buttery", "pastry"],
-            "British Scones": ["scones", "british", "tea", "clotted cream"],
-            "Danish Pastries": ["danish pastry", "breakfast", "butter", "layered"],
-            
-            # International Desserts
-            "Baklava": ["baklava", "greek", "honey", "nuts", "phyllo"],
-            "Japanese Mochi": ["mochi", "japanese", "rice cake", "sweet"],
-            "Turkish Delight": ["turkish delight", "lokum", "powdered sugar"],
-            "Portuguese Pastel de Nata": ["pastel de nata", "portuguese", "custard", "tart"],
-            "Italian Tiramisu": ["tiramisu", "italian", "coffee", "mascarpone"],
-            "Spanish Churros": ["churros", "spanish", "fried", "cinnamon sugar"],
-            
-            # Drinks & Beverages
-            "Matcha Desserts": ["matcha", "green tea", "japanese", "powder"],
+            "bread": ["artisan bread", "fresh bread", "baking", "loaf"],
+            "croissant": ["croissants", "french croissants", "buttery pastry"],
+            "pastry": ["pastry", "baked goods", "flaky pastry"],
+            "scone": ["scones", "british scones", "tea time pastry"],
+            "doughnut": ["doughnuts", "donuts", "glazed donuts", "breakfast pastry"],
             
             # Pizzas & Savory
-            "Italian Pizza Margherita": ["pizza margherita", "italian", "tomato", "mozzarella", "basil"],
-            "Neapolitan Pizza": ["neapolitan pizza", "wood fired", "italian"],
+            "pizza": ["pizza", "italian pizza", "cheese pizza", "wood fired pizza"],
+            "pasta": ["pasta", "italian pasta", "spaghetti", "noodles"],
+            "lasagna": ["lasagna", "italian lasagna", "pasta bake"],
+            "risotto": ["risotto", "creamy risotto", "italian rice dish"],
             
             # Asian Cuisine
-            "Japanese Ramen": ["ramen", "japanese", "noodles", "broth", "pork"],
-            "Thai Green Curry": ["thai green curry", "coconut milk", "spicy", "herbs"],
-            "Vietnamese Pho": ["pho", "vietnamese", "noodle soup", "beef", "herbs"],
-            "Korean Bibimbap": ["bibimbap", "korean", "rice bowl", "vegetables", "egg"],
-            "Chinese Dim Sum": ["dim sum", "chinese", "dumplings", "steamed"],
+            "ramen": ["ramen", "japanese ramen", "noodle soup", "bowl of ramen"],
+            "sushi": ["sushi", "japanese sushi", "sushi rolls", "nigiri"],
+            "curry": ["curry", "indian curry", "spicy curry", "curry dish"],
+            "pho": ["pho", "vietnamese pho", "noodle soup", "beef pho"],
+            "dim sum": ["dim sum", "chinese dim sum", "dumplings", "steamed buns"],
+            "bibimbap": ["bibimbap", "korean bibimbap", "rice bowl", "mixed rice"],
             
-            # Add more mappings for other topics...
+            # International
+            "taco": ["tacos", "mexican tacos", "street tacos", "taco Tuesday"],
+            "paella": ["paella", "spanish paella", "seafood paella", "rice dish"],
+            "kebab": ["kebab", "turkish kebab", "grilled meat", "shawarma"],
+            "hummus": ["hummus", "middle eastern hummus", "chickpea dip"],
+            "falafel": ["falafel", "middle eastern falafel", "fried chickpea"],
+            
+            # Breakfast
+            "pancake": ["pancakes", "fluffy pancakes", "breakfast pancakes", "stack"],
+            "waffle": ["waffles", "belgian waffles", "breakfast waffles"],
+            "omelette": ["omelette", "fluffy omelette", "breakfast eggs"],
+            
+            # Drinks
+            "coffee": ["coffee", "espresso", "cappuccino", "latte art"],
+            "tea": ["tea", "herbal tea", "tea cup", "tea leaves"],
+            "smoothie": ["smoothie", "fruit smoothie", "healthy smoothie", "blended"],
+            "cocktail": ["cocktail", "mixed drink", "martini", "mojito"],
         }
         
-        # Fallback images by category
-        self.fallback_images = {
-            "cake": [
-                "https://images.unsplash.com/photo-1578985545062-69928b1d9587",
-                "https://images.pexels.com/photos/291528/pexels-photo-291528.jpeg"
-            ],
-            "bread": [
-                "https://images.unsplash.com/photo-1549931319-a545dcf3bc73",
-                "https://images.pexels.com/photos/227432/pexels-photo-227432.jpeg"
-            ],
-            "dessert": [
-                "https://images.unsplash.com/photo-1558961363-fa8fdf82db35",
-                "https://images.pexels.com/photos/14107/pexels-photo-14107.jpeg"
-            ],
-            "pizza": [
-                "https://images.unsplash.com/photo-1565299624946-b28f40a0ae38",
-                "https://images.pexels.com/photos/806363/pexels-photo-806363.jpeg"
-            ],
-            "asian": [
-                "https://images.unsplash.com/photo-1552611052-33b04c8c17c6",
-                "https://images.pexels.com/photos/1092730/pexels-photo-1092730.jpeg"
-            ],
-            "drink": [
-                "https://images.unsplash.com/photo-1513558161293-cdaf765ed2fd",
-                "https://images.unsplash.com/photo-1551024709-8f23befc6f87"
-            ]
-        }
+        # Fallback images for when Unsplash fails
+        self.fallback_images = [
+            "https://images.unsplash.com/photo-1565958011703-44f9829ba187",  # General food
+            "https://images.unsplash.com/photo-1546069901-ba9599a7e63c",  # Ingredients
+            "https://images.unsplash.com/photo-1490818387583-1baba5e638af",  # Cooking
+            "https://images.unsplash.com/photo-1517248135467-4c7edcad34c4",  # Restaurant
+            "https://images.unsplash.com/photo-1556909114-f6e7ad7d3136",  # Bakery
+        ]
         
     def generate_recipe_topic(self):
         topics = [
@@ -392,179 +379,253 @@ class ContentEngine:
         self.db.add_to_topic_cache(topic)
         return topic
     
-    def _get_topic_category(self, topic: str) -> str:
-        """Determine the category of a topic for relevant image selection"""
+    def _get_topic_keywords(self, topic: str) -> List[str]:
+        """Get smart search keywords for a topic"""
         topic_lower = topic.lower()
         
-        if any(word in topic_lower for word in ["cake", "cupcake", "cheesecake", "brownie", "pie", "tart", "dessert", "sweet"]):
-            return "cake"
+        # First, check for exact keyword matches
+        for keyword, search_terms in self.topic_keyword_map.items():
+            if keyword in topic_lower:
+                return search_terms
+        
+        # If no exact match, analyze the topic
+        words = topic_lower.split()
+        
+        # Check for common food categories
+        if any(word in topic_lower for word in ["cake", "cupcake", "cheesecake", "brownie", "pie", "tart"]):
+            return self.topic_keyword_map.get("cake", ["dessert", "baking"])
         elif any(word in topic_lower for word in ["bread", "croissant", "scone", "pastry", "bun", "roll"]):
-            return "bread"
+            return self.topic_keyword_map.get("bread", ["bread", "baking"])
         elif any(word in topic_lower for word in ["pizza", "pasta", "lasagna", "risotto"]):
-            return "pizza"
-        elif any(word in topic_lower for word in ["ramen", "sushi", "curry", "pho", "dim sum", "asian", "japanese", "thai", "chinese", "korean"]):
-            return "asian"
-        elif any(word in topic_lower for word in ["drink", "coffee", "tea", "smoothie", "juice", "cocktail", "beverage"]):
-            return "drink"
-        else:
-            return "dessert"  # default category
+            return self.topic_keyword_map.get("pizza", ["italian food", "cooking"])
+        elif any(word in topic_lower for word in ["ramen", "sushi", "curry", "pho", "dim sum", "asian"]):
+            return self.topic_keyword_map.get("ramen", ["asian food", "cuisine"])
+        elif any(word in topic_lower for word in ["taco", "burrito", "enchilada", "mexican"]):
+            return self.topic_keyword_map.get("taco", ["mexican food", "tacos"])
+        elif any(word in topic_lower for word in ["coffee", "tea", "smoothie", "cocktail", "drink"]):
+            return self.topic_keyword_map.get("coffee", ["beverage", "drink"])
+        elif any(word in topic_lower for word in ["pancake", "waffle", "omelette", "breakfast"]):
+            return self.topic_keyword_map.get("pancake", ["breakfast", "brunch"])
+        
+        # Default to general food keywords
+        return ["food", "cooking", "recipe", "delicious"]
     
-    def _get_relevant_keywords(self, topic: str) -> List[str]:
-        """Get relevant keywords for a topic"""
-        # First check if we have predefined keywords
-        if topic in self.topic_keywords:
-            return self.topic_keywords[topic]
-        
-        # Extract keywords from the topic name
-        words = topic.lower().split()
-        relevant = []
-        
-        # Add main topic words
-        relevant.extend(words[:2])
-        
-        # Add category-based words
-        category = self._get_topic_category(topic)
-        if category == "cake":
-            relevant.extend(["cake", "dessert", "baking"])
-        elif category == "bread":
-            relevant.extend(["bread", "baking", "artisan"])
-        elif category == "pizza":
-            relevant.extend(["pizza", "italian", "cheese"])
-        elif category == "asian":
-            relevant.extend(["asian", "food", "cuisine"])
-        elif category == "drink":
-            relevant.extend(["drink", "beverage", "refreshment"])
-        else:
-            relevant.extend(["food", "recipe", "cooking"])
-        
-        return list(dict.fromkeys(relevant))[:4]  # Remove duplicates and limit
-    
-    def generate_topic_relevant_image(self, topic: str):
-        """Generate an image URL that's relevant to the topic"""
+    def generate_high_quality_unsplash_image(self, topic: str):
+        """Generate high-quality Unsplash image URL with smart keyword search"""
         try:
-            # Get relevant keywords for this topic
-            keywords = self._get_relevant_keywords(topic)
+            # Get smart keywords for this topic
+            keywords = self._get_topic_keywords(topic)
+            main_keyword = keywords[0]
             
-            # Generate a random seed for variety
+            # Generate random seed for variety
             random_seed = random.randint(1000, 9999)
             timestamp = int(time.time())
             
-            # Create search query from keywords
-            query = ",".join(keywords)
+            # If we have Unsplash API key, use official API for better results
+            if Config.UNSPLASH_ACCESS_KEY:
+                try:
+                    # Use Unsplash API for more precise results
+                    search_query = "+".join(keywords[:2])  # Use top 2 keywords
+                    api_url = f"https://api.unsplash.com/photos/random"
+                    params = {
+                        'query': search_query,
+                        'orientation': 'landscape',
+                        'content_filter': 'high',
+                        'client_id': Config.UNSPLASH_ACCESS_KEY
+                    }
+                    
+                    response = requests.get(api_url, params=params, timeout=10)
+                    if response.status_code == 200:
+                        data = response.json()
+                        image_url = data['urls']['regular']
+                        logger.info(f"📸 Unsplash API: Found image for '{topic}' with query: {search_query}")
+                        return f"{image_url}?t={timestamp}"
+                except Exception as api_error:
+                    logger.warning(f"⚠️ Unsplash API failed, using public endpoint: {api_error}")
             
-            # List of image APIs that support search by keyword
-            image_apis = [
-                # Unsplash with topic-specific search
-                f"https://source.unsplash.com/featured/1200x800/?{query}&sig={random_seed}",
-                
-                # More specific searches
-                f"https://source.unsplash.com/featured/1200x800/?food,{query}&sig={random_seed + 1}",
-                
-                # Category-based search
-                f"https://source.unsplash.com/featured/1200x800/?cooking,{keywords[0] if keywords else 'food'}&sig={random_seed + 2}",
-                
-                # High-quality food images
-                f"https://images.unsplash.com/photo-1565958011703-44f9829ba187?ixlib=rb-1.2.1&auto=format&fit=crop&w=1200&h=800&q=80&crop=entropy&cs=tinysrgb&sig={random_seed}",
-                
-                # Baking-specific if relevant
-                f"https://source.unsplash.com/featured/1200x800/?baking,{keywords[0] if keywords else 'dessert'}&sig={random_seed + 3}",
+            # Use public Unsplash endpoint with smart search
+            # Combine keywords for better results
+            search_terms = ",".join(keywords[:3])  # Max 3 keywords for public API
+            
+            # Generate multiple search options for better matching
+            search_options = [
+                f"https://source.unsplash.com/featured/1200x800/?{search_terms}&sig={random_seed}",
+                f"https://source.unsplash.com/1200x800/?food,{main_keyword}&sig={random_seed + 1}",
+                f"https://source.unsplash.com/featured/?{main_keyword},recipe&sig={random_seed + 2}",
+                f"https://images.unsplash.com/photo-1565958011703-44f9829ba187?ixlib=rb-1.2.1&auto=format&fit=crop&w=1200&h=800&q=80&crop=entropy&cs=tinysrgb&sig={random_seed}",  # High-quality food photo
+                f"https://source.unsplash.com/featured/1200x800/?cooking,{main_keyword}&sig={random_seed + 3}",
             ]
             
-            # Select API based on topic hash for consistency
-            topic_hash = hash(topic) % len(image_apis)
-            selected_api = image_apis[topic_hash]
+            # Select based on topic hash for consistency
+            topic_hash = hash(topic) % len(search_options)
+            image_url = search_options[topic_hash]
             
-            # Add timestamp to prevent caching
-            image_url = f"{selected_api}&t={timestamp}"
-            
-            logger.info(f"📸 Generated relevant image for '{topic}' with keywords: {keywords}")
-            return image_url
+            logger.info(f"📸 Unsplash: Using search terms '{search_terms}' for '{topic}'")
+            return f"{image_url}&t={timestamp}"
             
         except Exception as e:
-            logger.warning(f"⚠️ Relevant image generation failed: {e}")
-            # Fallback to category-specific images
-            return self._get_category_fallback_image(topic)
-    
-    def _get_category_fallback_image(self, topic: str) -> str:
-        """Get a fallback image based on topic category"""
-        category = self._get_topic_category(topic)
-        fallback_list = self.fallback_images.get(category, self.fallback_images["dessert"])
-        
-        # Select random image from category
-        image_url = random.choice(fallback_list)
-        
-        # Add timestamp to prevent caching
-        timestamp = int(time.time())
-        return f"{image_url}?t={timestamp}"
+            logger.warning(f"⚠️ Unsplash image generation failed: {e}")
+            # Fallback to high-quality food images
+            fallback_url = random.choice(self.fallback_images)
+            timestamp = int(time.time())
+            return f"{fallback_url}?w=1200&h=800&fit=crop&crop=entropy&t={timestamp}"
     
     def generate_ai_content_with_hashtags(self, topic: str):
         def _generate():
-            prompt = f'''Create a professional blog post about "{topic}" for a cooking and baking blog.
+            prompt = f'''Create a COMPLETE professional recipe blog post about "{topic}" for a cooking and baking blog.
 
-Requirements:
-1. Write an engaging title (5-10 words)
-2. Write an introduction paragraph (2-3 sentences)
-3. Write a detailed description (3-4 sentences)
-4. List 5-7 key ingredients
-5. Provide 2-3 professional baking tips
-6. Add a strong call-to-action
-7. Generate EXACTLY 2 specific hashtags related to this recipe (without # symbol, just the words)
+IMPORTANT REQUIREMENTS:
+1. Write an ENGAGING TITLE (5-10 words)
+2. Write a CAPTIVATING INTRODUCTION paragraph (2-3 sentences)
+3. Provide COMPLETE DETAILED RECIPE with these EXACT sections:
+
+A. COMPLETE INGREDIENTS LIST:
+   - List ALL ingredients with EXACT measurements
+   - Include EVERY ingredient needed, not just examples
+   - Format: "2 cups all-purpose flour", "1 teaspoon vanilla extract"
+
+B. DETAILED PREPARATION STEPS:
+   - Numbered steps 1 through 10+
+   - Each step should be clear and actionable
+   - Include cooking times and temperatures
+   - Cover from preparation to serving
+
+C. PROFESSIONAL COOKING TIPS (3-4 tips):
+   - Specific tips for this recipe
+   - Common mistakes to avoid
+   - Techniques for best results
+
+D. NUTRITIONAL INFORMATION (approximate):
+   - Calories per serving
+   - Protein, Carbs, Fat
+
+E. SERVING SUGGESTIONS:
+   - How to present and serve
+   - Accompaniment suggestions
+
+F. STORAGE INSTRUCTIONS:
+   - How to store leftovers
+   - Reheating instructions
+
+4. Add a STRONG CALL-TO-ACTION
+5. Generate EXACTLY 2 SPECIFIC HASHTAGS related to this recipe (without # symbol, just the words)
 
 Format your response EXACTLY as JSON:
 {{
     "title": "...",
     "introduction": "...",
-    "description": "...",
-    "ingredients": ["...", "...", "..."],
-    "tips": ["...", "...", "..."],
+    "ingredients": ["2 cups flour", "1 cup sugar", "...", "COMPLETE LIST"],
+    "steps": ["Step 1: Preheat oven to 350°F", "Step 2: Mix dry ingredients", "...", "Step 10: Serve warm"],
+    "tips": ["Use room temperature eggs", "Don't overmix batter", "..."],
+    "nutrition": "Calories: 350 | Protein: 5g | Carbs: 45g | Fat: 15g",
+    "serving": "Serve warm with vanilla ice cream",
+    "storage": "Store in airtight container for up to 3 days",
     "cta": "...",
-    "custom_hashtags": ["HashtagOne", "HashtagTwo"]
+    "custom_hashtags": ["ChocolateLavaCake", "DessertRecipe"]
 }}
 
-IMPORTANT: Return ONLY valid JSON, no extra text.'''
-            
+CRITICAL: Provide COMPLETE recipe with ALL ingredients and steps. NO placeholders like "see link for full recipe". ALL content must be in this JSON.'''
+
             response = self.clients.gemini_model.generate_content(prompt)
             content = response.text.strip()
+            
+            # Clean JSON response
             if '```json' in content:
                 content = content.split('```json')[1].split('```')[0].strip()
             elif '```' in content:
                 content = content.split('```')[1].split('```')[0].strip()
+            
             try:
-                return json.loads(content)
-            except:
+                data = json.loads(content)
+                
+                # Validate required fields
+                required_fields = ['title', 'introduction', 'ingredients', 'steps', 'tips', 'cta']
+                for field in required_fields:
+                    if field not in data:
+                        raise ValueError(f"Missing required field: {field}")
+                
+                # Ensure ingredients and steps are complete lists
+                if not isinstance(data.get('ingredients', []), list) or len(data['ingredients']) < 3:
+                    data['ingredients'] = self._default_ingredients(topic)
+                if not isinstance(data.get('steps', []), list) or len(data['steps']) < 5:
+                    data['steps'] = self._default_steps(topic)
+                
+                # Ensure hashtags
+                if 'custom_hashtags' not in data or not isinstance(data['custom_hashtags'], list) or len(data['custom_hashtags']) != 2:
+                    data['custom_hashtags'] = self._extract_hashtags_from_topic(topic)
+                
+                return data
+                
+            except json.JSONDecodeError:
                 logger.warning("⚠️ JSON parsing failed, trying to extract...")
                 import re
                 json_match = re.search(r'\{.*\}', content, re.DOTALL)
                 if json_match:
                     return json.loads(json_match.group())
-                return self._fallback_content(topic)
+                return self._fallback_complete_content(topic)
         
         try: 
-            result = self.clients.retry_with_smart_backoff(_generate, "Gemini AI", Config.GEMINI_MAX_RETRIES)
-            if 'custom_hashtags' not in result or not isinstance(result['custom_hashtags'], list) or len(result['custom_hashtags']) != 2:
-                result['custom_hashtags'] = self._extract_hashtags_from_topic(topic)
+            result = self.clients.retry_with_smart_backoff(_generate, "Gemini AI Complete Recipe", Config.GEMINI_MAX_RETRIES)
+            logger.info(f"✅ Generated complete recipe with {len(result.get('ingredients', []))} ingredients and {len(result.get('steps', []))} steps")
             return result
         except:
             logger.warning("⚠️ Using fallback content due to API failure")
-            return self._fallback_content(topic)
+            return self._fallback_complete_content(topic)
+    
+    def _default_ingredients(self, topic: str):
+        """Default ingredients if AI fails"""
+        return [
+            f"2 cups all-purpose flour for {topic}",
+            "1 cup granulated sugar",
+            "3 large eggs, room temperature",
+            "1/2 cup unsalted butter, melted",
+            "1 cup milk or buttermilk",
+            "2 teaspoons baking powder",
+            "1 teaspoon vanilla extract",
+            "1/2 teaspoon salt"
+        ]
+    
+    def _default_steps(self, topic: str):
+        """Default preparation steps if AI fails"""
+        return [
+            f"Step 1: Preheat your oven to 350°F (175°C) for perfect {topic}",
+            "Step 2: Grease and flour your baking pan to prevent sticking",
+            "Step 3: In a large bowl, whisk together all dry ingredients",
+            "Step 4: In another bowl, mix wet ingredients until smooth",
+            "Step 5: Gradually combine wet and dry ingredients, mixing just until incorporated",
+            "Step 6: Pour batter into prepared pan and smooth the top",
+            f"Step 7: Bake for 25-30 minutes until {topic} is golden and toothpick comes out clean",
+            "Step 8: Cool in pan for 10 minutes, then transfer to wire rack",
+            "Step 9: Allow to cool completely before serving",
+            f"Step 10: Serve your delicious {topic} with your favorite accompaniments"
+        ]
+    
+    def _fallback_complete_content(self, topic: str):
+        """Complete fallback content with all recipe details"""
+        hashtags = self._extract_hashtags_from_topic(topic)
+        return {
+            "title": f"Professional Guide to Making Perfect {topic}",
+            "introduction": f"Welcome to our detailed recipe for {topic}. This professional guide will walk you through every step to create restaurant-quality results at home.",
+            "ingredients": self._default_ingredients(topic),
+            "steps": self._default_steps(topic),
+            "tips": [
+                "Use room temperature ingredients for even mixing",
+                "Preheat your oven fully before baking",
+                "Measure flour correctly by spooning into cup and leveling",
+                f"Don't overmix the {topic.lower()} batter to avoid toughness"
+            ],
+            "nutrition": "Approximately 300-400 calories per serving | Protein: 6g | Carbs: 50g | Fat: 12g",
+            "serving": f"Serve {topic} warm with fresh fruit, whipped cream, or ice cream. Perfect for special occasions or everyday treats.",
+            "storage": "Store in an airtight container at room temperature for 3 days, or freeze for up to 3 months.",
+            "cta": "Try this recipe today and share your results with us! For more professional recipes and cooking tips, visit our blog regularly.",
+            "custom_hashtags": hashtags
+        }
     
     def _extract_hashtags_from_topic(self, topic: str):
         words = topic.replace('-', ' ').split()
         if len(words) >= 2:
-            return [words[0] + words[1], 'Baking' + words[0]]
-        return [topic.replace(' ', ''), 'Baking']
-    
-    def _fallback_content(self, topic: str):
-        hashtags = self._extract_hashtags_from_topic(topic)
-        return {
-            "title": f"Mastering {topic}",
-            "introduction": f"Welcome to our guide on {topic}.",
-            "description": "This recipe combines traditional and modern techniques to create the perfect result.",
-            "ingredients": ["Flour", "Sugar", "Butter", "Eggs", "Vanilla", "Baking powder"],
-            "tips": ["Use room temperature ingredients", "Preheat oven properly", "Don't overmix the batter"],
-            "cta": "Visit our blog for more amazing recipes!",
-            "custom_hashtags": hashtags
-        }
+            return [words[0] + words[1], topic.replace(' ', '') + 'Recipe']
+        return [topic.replace(' ', ''), 'HomeBaking']
     
     def generate_final_hashtags(self, custom_hashtags: List[str]):
         final_tags = []
@@ -577,22 +638,47 @@ IMPORTANT: Return ONLY valid JSON, no extra text.'''
         return list(dict.fromkeys(final_tags))[:15]
     
     def format_post_content(self, ai_content: Dict):
-        ingredients = "".join([f'<li>{i}</li>' for i in ai_content['ingredients']])
-        tips = "".join([f'<li>{t}</li>' for t in ai_content['tips']])
-        return f'''<div style="font-family: Arial, sans-serif; line-height: 1.6;">
-<h2 style="color: #2c3e50;">{ai_content["title"]}</h2>
-<p style="font-size: 16px; color: #34495e;">{ai_content["introduction"]}</p>
-<p style="font-size: 15px; color: #555;">{ai_content["description"]}</p>
-<h3 style="color: #e74c3c;">✨ Ingredients:</h3>
-<ul style="color: #555;">{ingredients}</ul>
-<h3 style="color: #3498db;">👩‍🍳 Professional Tips:</h3>
-<ul style="color: #555;">{tips}</ul>
-<div style="background: #f8f9fa; padding: 15px; border-left: 4px solid #e74c3c; margin-top: 20px;">
-<h3 style="color: #2c3e50; margin-top: 0;">🎯 {ai_content["cta"]}</h3>
-<p><strong>Visit our blog:</strong> <a href="{Config.BLOG_WEBSITE}" target="_blank">She Cooks & Bakes</a></p>
+        """Format complete recipe content for Tumblr"""
+        ingredients = "".join([f'<li>{i}</li>' for i in ai_content.get('ingredients', [])])
+        steps = "".join([f'<li>{s}</li>' for s in ai_content.get('steps', [])])
+        tips = "".join([f'<li>{t}</li>' for t in ai_content.get('tips', [])])
+        
+        # Add optional sections if they exist
+        nutrition_html = f'''<h3 style="color: #27ae60;">📊 Nutritional Information:</h3>
+<p style="color: #555;">{ai_content.get('nutrition', 'Nutrition information varies based on specific ingredients used.')}</p>''' if ai_content.get('nutrition') else ''
+        
+        serving_html = f'''<h3 style="color: #8e44ad;">🍽️ Serving Suggestions:</h3>
+<p style="color: #555;">{ai_content.get('serving', '')}</p>''' if ai_content.get('serving') else ''
+        
+        storage_html = f'''<h3 style="color: #e67e22;">💾 Storage Instructions:</h3>
+<p style="color: #555;">{ai_content.get('storage', '')}</p>''' if ai_content.get('storage') else ''
+        
+        return f'''<div style="font-family: Arial, sans-serif; line-height: 1.6; max-width: 800px; margin: 0 auto;">
+<h1 style="color: #2c3e50; border-bottom: 3px solid #e74c3c; padding-bottom: 10px;">{ai_content["title"]}</h1>
+<p style="font-size: 18px; color: #34495e; background: #f8f9fa; padding: 15px; border-radius: 5px;">{ai_content["introduction"]}</p>
+
+<h2 style="color: #e74c3c; margin-top: 30px;">🛒 Ingredients:</h2>
+<ul style="color: #555; background: #fff9e6; padding: 20px 20px 20px 40px; border-radius: 5px; border-left: 4px solid #f39c12;">{ingredients}</ul>
+
+<h2 style="color: #3498db; margin-top: 30px;">👩‍🍳 Preparation Steps:</h2>
+<ol style="color: #555; background: #e8f4f8; padding: 20px 20px 20px 40px; border-radius: 5px; border-left: 4px solid #3498db;">{steps}</ol>
+
+<h2 style="color: #9b59b6; margin-top: 30px;">💡 Professional Tips:</h2>
+<ul style="color: #555; background: #f4ecf7; padding: 20px 20px 20px 40px; border-radius: 5px; border-left: 4px solid #9b59b6;">{tips}</ul>
+
+{nutrition_html}
+{serving_html}
+{storage_html}
+
+<div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 25px; border-radius: 10px; margin-top: 30px; text-align: center;">
+<h3 style="color: white; margin-top: 0;">✨ {ai_content["cta"]}</h3>
+<p style="margin-bottom: 0;"><strong>Visit our blog:</strong> <a href="{Config.BLOG_WEBSITE}" target="_blank" style="color: #ffd700; text-decoration: underline;">She Cooks & Bakes - Professional Recipes</a></p>
 </div>
-<hr style="margin: 20px 0; border-top: 1px solid #ddd;">
-<p style="font-size: 12px; color: #999; text-align: center;">Posted by She Cooks Bakes AI • {datetime.now().strftime("%B %d, %Y")}</p>
+
+<hr style="margin: 30px 0; border-top: 2px dashed #ddd;">
+<p style="font-size: 14px; color: #7f8c8d; text-align: center;">
+Posted by She Cooks Bakes AI • {datetime.now().strftime("%B %d, %Y")} • Complete Recipe Guide
+</p>
 </div>'''
 
 class PublishingManager:
@@ -607,17 +693,18 @@ class PublishingManager:
         try:
             topic = self.engine.generate_recipe_topic()
             logger.info(f"🍰 Topic: {topic}")
-            logger.info("📝 Generating content with Gemini AI...")
+            logger.info("📝 Generating COMPLETE recipe content with Gemini AI...")
             ai_content = self.engine.generate_ai_content_with_hashtags(topic)
+            logger.info(f"✅ Generated: {len(ai_content.get('ingredients', []))} ingredients, {len(ai_content.get('steps', []))} steps")
             logger.info(f"🏷️ Custom hashtags: {ai_content.get('custom_hashtags', [])}")
             self.human_delay(20, 40)
-            logger.info("🎨 Generating topic-relevant image...")
-            image_url = self.engine.generate_topic_relevant_image(topic)
+            logger.info("🎨 Fetching high-quality Unsplash image...")
+            image_url = self.engine.generate_high_quality_unsplash_image(topic)
             self.human_delay(30, 50)
             final_tags = self.engine.generate_final_hashtags(ai_content.get('custom_hashtags', []))
             logger.info(f"🏷️ Final tags ({len(final_tags)}): {', '.join(final_tags[:5])}...")
             content = self.engine.format_post_content(ai_content)
-            logger.info("🚀 Publishing to Tumblr...")
+            logger.info("🚀 Publishing complete recipe to Tumblr...")
             response = self.engine.clients.retry_with_smart_backoff(lambda: self.engine.clients.tumblr_client.create_photo(blogname=self.engine.blog_url, state="published", tags=final_tags, caption=content, source=image_url, format="html"), "Tumblr", Config.TUMBLR_MAX_RETRIES)
             post_id = response.get('id', 'unknown')
             duration = time.time() - start
@@ -627,7 +714,7 @@ class PublishingManager:
             self.db.update_state('total_posts', str(self.db.get_post_count()))
             metrics.record_publish_success(duration)
             self.db.save_metric('publish_duration', duration)
-            logger.info(f"✅ Published in {duration:.1f}s! ID: {post_id}")
+            logger.info(f"✅ Published COMPLETE recipe in {duration:.1f}s! ID: {post_id}")
             return post_data
         except Exception as e:
             duration = time.time() - start
@@ -776,7 +863,8 @@ def main():
         logger.info("=" * 60)
         logger.info(f"🚀 {Config.APP_NAME} v{Config.VERSION}")
         logger.info(f"🤖 AI Engine: Google Gemini (Free & Unlimited)")
-        logger.info(f"📸 Image System: Topic-Relevant (No random images)")
+        logger.info(f"📸 Image System: High-Quality Unsplash (Free)")
+        logger.info(f"📝 Content: COMPLETE Recipes (No external links)")
         logger.info(f"⏰ Started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         logger.info("=" * 60)
         EnvironmentValidator.validate()
@@ -800,7 +888,8 @@ def main():
         logger.info("=" * 60)
         logger.info("📱 Mobile posting: https://your-app.onrender.com/post-now")
         logger.info("🏷️ Hashtag system: 2 AI-generated + global tags")
-        logger.info("📸 Image system: Topic-relevant (Cake → Cake image, Pizza → Pizza image)")
+        logger.info("📸 Images: High-quality Unsplash (topic-relevant)")
+        logger.info("📝 Recipes: COMPLETE with all ingredients & steps")
         logger.info("=" * 60)
         serve(app, host=Config.FLASK_HOST, port=Config.FLASK_PORT, threads=4, channel_timeout=60, cleanup_interval=30, _quiet=False)
     except KeyboardInterrupt:
