@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-She Cooks Bakes AI v4.2.0
-✅ Fixed: Scheduler lock conflict (Memory jobstore)
-✅ Fixed: Mobile access to /post-now (GET + POST)
-✅ Fixed: Rate limit handling (Extended delays)
+She Cooks Bakes AI v5.0.0
+✅ NEW: Google Gemini AI (Free tier, unlimited creativity)
+✅ NEW: Smart hashtag system (2 AI-generated + global tags)
+✅ Fixed: All previous issues (Scheduler, Mobile, Rate limits)
 """
 import os, sys, json, time, random, logging, sqlite3, requests, threading, shutil
 from datetime import datetime, timedelta
@@ -12,7 +12,7 @@ from contextlib import contextmanager
 from collections import deque
 from waitress import serve
 from flask import Flask, jsonify, render_template_string, request
-from openai import OpenAI, APIError, RateLimitError, APIConnectionError
+import google.generativeai as genai
 import pytumblr
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.jobstores.memory import MemoryJobStore
@@ -20,7 +20,7 @@ from logging.handlers import RotatingFileHandler
 
 class Config:
     APP_NAME = "She Cooks Bakes AI"
-    VERSION = "4.2.0"
+    VERSION = "5.0.0"
     ENVIRONMENT = os.getenv("ENVIRONMENT", "production")
     FLASK_HOST = "0.0.0.0"
     FLASK_PORT = int(os.getenv("PORT", 10000))
@@ -33,11 +33,11 @@ class Config:
     DB_BACKUP_INTERVAL = 86400
     DB_MAX_BACKUPS = 7
     TOPIC_CACHE_SIZE = 10
-    OPENAI_MAX_RETRIES = 3
-    OPENAI_RETRY_DELAY = 5
+    GEMINI_MAX_RETRIES = 3
+    GEMINI_RETRY_DELAY = 5
     TUMBLR_MAX_RETRIES = 3
     TUMBLR_RETRY_DELAY = 3
-    OPENAI_RATE_LIMIT_PAUSE = 90
+    GEMINI_RATE_LIMIT_PAUSE = 60
     SELF_PING_ENABLED = True
     SELF_PING_INTERVAL = 840
     BLOG_URL = "shecooksandbakes.tumblr.com"
@@ -46,6 +46,7 @@ class Config:
     LOG_MAX_BYTES = 5 * 1024 * 1024
     LOG_BACKUP_COUNT = 3
     METRICS_ENABLED = True
+    GLOBAL_HASHTAGS = ["Food", "Recipe", "Cooking", "Chef", "Yummy", "InstaFood", "Delicious", "Foodie", "HomeCooking", "FoodLover"]
 
 def setup_logging():
     logger = logging.getLogger(Config.APP_NAME)
@@ -198,7 +199,7 @@ class DatabaseManager:
         except: pass
 
 class EnvironmentValidator:
-    REQUIRED_VARS = ['TUMBLR_CONSUMER_KEY', 'TUMBLR_CONSUMER_SECRET', 'TUMBLR_OAUTH_TOKEN', 'TUMBLR_OAUTH_SECRET', 'OPENAI_API_KEY']
+    REQUIRED_VARS = ['TUMBLR_CONSUMER_KEY', 'TUMBLR_CONSUMER_SECRET', 'TUMBLR_OAUTH_TOKEN', 'TUMBLR_OAUTH_SECRET', 'GEMINI_API_KEY']
     @staticmethod
     def validate():
         missing = [var for var in EnvironmentValidator.REQUIRED_VARS if not os.getenv(var)]
@@ -212,50 +213,42 @@ class EnvironmentValidator:
 class APIClients:
     def __init__(self):
         self.tumblr_client = pytumblr.TumblrRestClient(consumer_key=os.getenv('TUMBLR_CONSUMER_KEY'), consumer_secret=os.getenv('TUMBLR_CONSUMER_SECRET'), oauth_token=os.getenv('TUMBLR_OAUTH_TOKEN'), oauth_secret=os.getenv('TUMBLR_OAUTH_SECRET'))
-        self.openai_client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'), timeout=60.0, max_retries=0)
-        logger.info("✅ API clients initialized")
+        genai.configure(api_key=os.getenv('GEMINI_API_KEY'))
+        self.gemini_model = genai.GenerativeModel('gemini-pro')
+        logger.info("✅ API clients initialized (Google Gemini)")
     def retry_with_smart_backoff(self, func, operation_name: str, max_retries: int = 3):
         for attempt in range(max_retries):
             try:
                 metrics.record_api_call(success=True)
                 return func()
-            except RateLimitError as e:
-                metrics.record_api_call(success=False)
-                logger.warning(f"⚠️ Rate limit hit: {operation_name}")
-                if attempt < max_retries - 1:
-                    wait_time = Config.OPENAI_RATE_LIMIT_PAUSE
-                    logger.info(f"⏳ Waiting {wait_time}s for rate limit cooldown...")
-                    time.sleep(wait_time)
-                else:
-                    logger.error(f"❌ Rate limit exceeded after {max_retries} attempts")
-                    raise
-            except APIConnectionError as e:
-                metrics.record_api_call(success=False)
-                logger.warning(f"⚠️ Connection error: {operation_name}")
-                if attempt < max_retries - 1:
-                    delay = Config.OPENAI_RETRY_DELAY * (2 ** attempt)
-                    logger.info(f"⏳ Retrying in {delay}s...")
-                    time.sleep(delay)
-                else:
-                    raise
-            except APIError as e:
-                metrics.record_api_call(success=False)
-                logger.error(f"❌ API error: {operation_name} - Status {e.status_code if hasattr(e, 'status_code') else 'unknown'}")
-                if attempt < max_retries - 1 and (not hasattr(e, 'status_code') or e.status_code >= 500):
-                    delay = Config.OPENAI_RETRY_DELAY * (2 ** attempt)
-                    logger.info(f"⏳ Retrying in {delay}s...")
-                    time.sleep(delay)
-                else:
-                    raise
             except Exception as e:
                 metrics.record_api_call(success=False)
-                logger.error(f"❌ Unexpected error: {operation_name} - {str(e)}")
-                if attempt < max_retries - 1:
-                    delay = Config.OPENAI_RETRY_DELAY * (2 ** attempt)
-                    logger.info(f"⏳ Retrying in {delay}s...")
-                    time.sleep(delay)
+                error_str = str(e).lower()
+                if 'quota' in error_str or 'rate' in error_str or 'limit' in error_str:
+                    logger.warning(f"⚠️ Rate limit hit: {operation_name}")
+                    if attempt < max_retries - 1:
+                        wait_time = Config.GEMINI_RATE_LIMIT_PAUSE
+                        logger.info(f"⏳ Waiting {wait_time}s for rate limit cooldown...")
+                        time.sleep(wait_time)
+                    else:
+                        logger.error(f"❌ Rate limit exceeded after {max_retries} attempts")
+                        raise
+                elif 'connection' in error_str or 'network' in error_str:
+                    logger.warning(f"⚠️ Connection error: {operation_name}")
+                    if attempt < max_retries - 1:
+                        delay = Config.GEMINI_RETRY_DELAY * (2 ** attempt)
+                        logger.info(f"⏳ Retrying in {delay}s...")
+                        time.sleep(delay)
+                    else:
+                        raise
                 else:
-                    raise
+                    logger.error(f"❌ API error: {operation_name} - {str(e)}")
+                    if attempt < max_retries - 1:
+                        delay = Config.GEMINI_RETRY_DELAY * (2 ** attempt)
+                        logger.info(f"⏳ Retrying in {delay}s...")
+                        time.sleep(delay)
+                    else:
+                        raise
 
 class ContentEngine:
     def __init__(self, api_clients: APIClients, db_manager: DatabaseManager):
@@ -276,26 +269,86 @@ class ContentEngine:
         topic = random.choice(available)
         self.db.add_to_topic_cache(topic)
         return topic
-    def generate_ai_text(self, topic: str):
+    def generate_ai_content_with_hashtags(self, topic: str):
         def _generate():
-            response = self.clients.openai_client.chat.completions.create(model="gpt-3.5-turbo", messages=[{"role": "system", "content": "You are a professional pastry chef."}, {"role": "user", "content": f'Create blog post about "{topic}". JSON: {{"title": "...", "introduction": "...", "description": "...", "ingredients": [...], "tips": [...], "cta": "..."}}'}], temperature=0.8, max_tokens=600)
-            content = response.choices[0].message.content.strip()
-            return json.loads(content) if content.startswith('{') else self._fallback_content(topic)
-        try: return self.clients.retry_with_smart_backoff(_generate, "AI Text", Config.OPENAI_MAX_RETRIES)
-        except: 
+            prompt = f'''Create a professional blog post about "{topic}" for a cooking and baking blog.
+
+Requirements:
+1. Write an engaging title (5-10 words)
+2. Write an introduction paragraph (2-3 sentences)
+3. Write a detailed description (3-4 sentences)
+4. List 5-7 key ingredients
+5. Provide 2-3 professional baking tips
+6. Add a strong call-to-action
+7. Generate EXACTLY 2 specific hashtags related to this recipe (without # symbol, just the words)
+
+Format your response EXACTLY as JSON:
+{{
+    "title": "...",
+    "introduction": "...",
+    "description": "...",
+    "ingredients": ["...", "...", "..."],
+    "tips": ["...", "...", "..."],
+    "cta": "...",
+    "custom_hashtags": ["HashtagOne", "HashtagTwo"]
+}}
+
+IMPORTANT: Return ONLY valid JSON, no extra text.'''
+            
+            response = self.clients.gemini_model.generate_content(prompt)
+            content = response.text.strip()
+            if '```json' in content:
+                content = content.split('```json')[1].split('```')[0].strip()
+            elif '```' in content:
+                content = content.split('```')[1].split('```')[0].strip()
+            try:
+                return json.loads(content)
+            except:
+                logger.warning("⚠️ JSON parsing failed, trying to extract...")
+                import re
+                json_match = re.search(r'\{.*\}', content, re.DOTALL)
+                if json_match:
+                    return json.loads(json_match.group())
+                return self._fallback_content(topic)
+        
+        try: 
+            result = self.clients.retry_with_smart_backoff(_generate, "Gemini AI", Config.GEMINI_MAX_RETRIES)
+            if 'custom_hashtags' not in result or not isinstance(result['custom_hashtags'], list) or len(result['custom_hashtags']) != 2:
+                result['custom_hashtags'] = self._extract_hashtags_from_topic(topic)
+            return result
+        except:
             logger.warning("⚠️ Using fallback content due to API failure")
             return self._fallback_content(topic)
+    
+    def _extract_hashtags_from_topic(self, topic: str):
+        words = topic.replace('-', ' ').split()
+        if len(words) >= 2:
+            return [words[0] + words[1], 'Baking' + words[0]]
+        return [topic.replace(' ', ''), 'Baking']
+    
     def _fallback_content(self, topic: str):
-        return {"title": f"Mastering {topic}", "introduction": f"Welcome to our guide on {topic}.", "description": "This recipe combines traditional and modern techniques.", "ingredients": ["Flour", "Sugar", "Butter", "Eggs", "Vanilla", "Baking powder"], "tips": ["Use room temp ingredients", "Preheat oven", "Don't overmix"], "cta": "Visit our blog!"}
-    def generate_ai_image(self, description: str):
-        def _generate():
-            response = self.clients.openai_client.images.generate(model="dall-e-3", prompt=f"Professional food photography: {description}", size="1024x1024", quality="standard", n=1)
-            return response.data[0].url
-        try: return self.clients.retry_with_smart_backoff(_generate, "AI Image", Config.OPENAI_MAX_RETRIES)
-        except: 
-            logger.warning("⚠️ Using fallback image due to API failure")
-            return self._fallback_image()
-    def _fallback_image(self):
+        hashtags = self._extract_hashtags_from_topic(topic)
+        return {
+            "title": f"Mastering {topic}",
+            "introduction": f"Welcome to our guide on {topic}.",
+            "description": "This recipe combines traditional and modern techniques to create the perfect result.",
+            "ingredients": ["Flour", "Sugar", "Butter", "Eggs", "Vanilla", "Baking powder"],
+            "tips": ["Use room temperature ingredients", "Preheat oven properly", "Don't overmix the batter"],
+            "cta": "Visit our blog for more amazing recipes!",
+            "custom_hashtags": hashtags
+        }
+    
+    def generate_final_hashtags(self, custom_hashtags: List[str]):
+        final_tags = []
+        for tag in custom_hashtags[:2]:
+            clean_tag = tag.replace('#', '').replace(' ', '')
+            if clean_tag:
+                final_tags.append(clean_tag)
+        final_tags.extend(random.sample(Config.GLOBAL_HASHTAGS, min(len(Config.GLOBAL_HASHTAGS), 8)))
+        final_tags.extend(self.base_tags[:5])
+        return list(dict.fromkeys(final_tags))[:15]
+    
+    def generate_fallback_image(self):
         images = self.backup_images[self.current_source]
         image = images[self.image_index % len(images)]
         self.image_index += 1
@@ -303,14 +356,27 @@ class ContentEngine:
             sources = list(self.backup_images.keys())
             idx = sources.index(self.current_source)
             self.current_source = sources[(idx + 1) % len(sources)]
-        logger.info(f"📸 Fallback image from {self.current_source}")
+        logger.info(f"📸 Using fallback image from {self.current_source}")
         return image
-    def generate_trending_tags(self):
-        return random.sample(["Foodie", "InstaFood", "Yummy", "FoodPhotography", "BakingFromScratch", "DessertLover", "HomeChef", "EasyRecipes", "FoodBlogger", "SweetTooth"], 4)
+    
     def format_post_content(self, ai_content: Dict):
         ingredients = "".join([f'<li>{i}</li>' for i in ai_content['ingredients']])
         tips = "".join([f'<li>{t}</li>' for t in ai_content['tips']])
-        return f'<div style="font-family: Arial, sans-serif; line-height: 1.6;"><h2 style="color: #2c3e50;">{ai_content["title"]}</h2><p style="font-size: 16px; color: #34495e;">{ai_content["introduction"]}</p><p style="font-size: 15px; color: #555;">{ai_content["description"]}</p><h3 style="color: #e74c3c;">✨ Ingredients:</h3><ul style="color: #555;">{ingredients}</ul><h3 style="color: #3498db;">👩‍🍳 Tips:</h3><ul style="color: #555;">{tips}</ul><div style="background: #f8f9fa; padding: 15px; border-left: 4px solid #e74c3c; margin-top: 20px;"><h3 style="color: #2c3e50; margin-top: 0;">🎯 {ai_content["cta"]}</h3><p><strong>Visit:</strong> <a href="{Config.BLOG_WEBSITE}">She Cooks & Bakes</a></p></div><hr style="margin: 20px 0; border-top: 1px solid #ddd;"><p style="font-size: 12px; color: #999; text-align: center;">Posted by She Cooks Bakes AI • {datetime.now().strftime("%B %d, %Y")}</p></div>'
+        return f'''<div style="font-family: Arial, sans-serif; line-height: 1.6;">
+<h2 style="color: #2c3e50;">{ai_content["title"]}</h2>
+<p style="font-size: 16px; color: #34495e;">{ai_content["introduction"]}</p>
+<p style="font-size: 15px; color: #555;">{ai_content["description"]}</p>
+<h3 style="color: #e74c3c;">✨ Ingredients:</h3>
+<ul style="color: #555;">{ingredients}</ul>
+<h3 style="color: #3498db;">👩‍🍳 Professional Tips:</h3>
+<ul style="color: #555;">{tips}</ul>
+<div style="background: #f8f9fa; padding: 15px; border-left: 4px solid #e74c3c; margin-top: 20px;">
+<h3 style="color: #2c3e50; margin-top: 0;">🎯 {ai_content["cta"]}</h3>
+<p><strong>Visit our blog:</strong> <a href="{Config.BLOG_WEBSITE}" target="_blank">She Cooks & Bakes</a></p>
+</div>
+<hr style="margin: 20px 0; border-top: 1px solid #ddd;">
+<p style="font-size: 12px; color: #999; text-align: center;">Posted by She Cooks Bakes AI • {datetime.now().strftime("%B %d, %Y")}</p>
+</div>'''
 
 class PublishingManager:
     def __init__(self, content_engine: ContentEngine, db_manager: DatabaseManager):
@@ -324,19 +390,21 @@ class PublishingManager:
         try:
             topic = self.engine.generate_recipe_topic()
             logger.info(f"🍰 Topic: {topic}")
-            logger.info("📝 Generating text...")
-            ai_content = self.engine.generate_ai_text(topic)
+            logger.info("📝 Generating content with Gemini AI...")
+            ai_content = self.engine.generate_ai_content_with_hashtags(topic)
+            logger.info(f"🏷️ Custom hashtags: {ai_content.get('custom_hashtags', [])}")
             self.human_delay(20, 40)
-            logger.info("🎨 Generating image...")
-            image_url = self.engine.generate_ai_image(f"{ai_content['title']} food")
+            logger.info("🎨 Preparing image...")
+            image_url = self.engine.generate_fallback_image()
             self.human_delay(30, 50)
-            tags = self.engine.base_tags + self.engine.generate_trending_tags()
+            final_tags = self.engine.generate_final_hashtags(ai_content.get('custom_hashtags', []))
+            logger.info(f"🏷️ Final tags ({len(final_tags)}): {', '.join(final_tags[:5])}...")
             content = self.engine.format_post_content(ai_content)
             logger.info("🚀 Publishing to Tumblr...")
-            response = self.engine.clients.retry_with_smart_backoff(lambda: self.engine.clients.tumblr_client.create_photo(blogname=self.engine.blog_url, state="published", tags=tags, caption=content, source=image_url, format="html"), "Tumblr", Config.TUMBLR_MAX_RETRIES)
+            response = self.engine.clients.retry_with_smart_backoff(lambda: self.engine.clients.tumblr_client.create_photo(blogname=self.engine.blog_url, state="published", tags=final_tags, caption=content, source=image_url, format="html"), "Tumblr", Config.TUMBLR_MAX_RETRIES)
             post_id = response.get('id', 'unknown')
             duration = time.time() - start
-            post_data = {"success": True, "post_id": str(post_id), "topic": topic, "title": ai_content['title'], "image_url": image_url, "tags": tags}
+            post_data = {"success": True, "post_id": str(post_id), "topic": topic, "title": ai_content['title'], "image_url": image_url, "tags": final_tags}
             self.db.save_post(post_data, duration)
             self.db.update_state('last_post_time', datetime.now().isoformat())
             self.db.update_state('total_posts', str(self.db.get_post_count()))
@@ -394,157 +462,50 @@ app = Flask(__name__)
 db_manager = publisher = scheduler = None
 start_time = time.time()
 
-MOBILE_POST_HTML = '''
-<!DOCTYPE html>
+MOBILE_POST_HTML = '''<!DOCTYPE html>
 <html>
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Post Now - She Cooks Bakes</title>
-    <style>
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-            max-width: 600px;
-            margin: 0 auto;
-            padding: 20px;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh;
-        }
-        .container {
-            background: white;
-            border-radius: 15px;
-            padding: 30px;
-            box-shadow: 0 10px 30px rgba(0,0,0,0.3);
-        }
-        h1 {
-            color: #2c3e50;
-            text-align: center;
-            margin-bottom: 10px;
-        }
-        .subtitle {
-            text-align: center;
-            color: #7f8c8d;
-            margin-bottom: 30px;
-        }
-        button {
-            width: 100%;
-            padding: 15px;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            border: none;
-            border-radius: 8px;
-            font-size: 18px;
-            font-weight: bold;
-            cursor: pointer;
-            transition: all 0.3s;
-        }
-        button:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
-        }
-        button:active {
-            transform: translateY(0);
-        }
-        button:disabled {
-            background: #95a5a6;
-            cursor: not-allowed;
-        }
-        .result {
-            margin-top: 20px;
-            padding: 15px;
-            border-radius: 8px;
-            display: none;
-        }
-        .success {
-            background: #d4edda;
-            color: #155724;
-            border: 1px solid #c3e6cb;
-        }
-        .error {
-            background: #f8d7da;
-            color: #721c24;
-            border: 1px solid #f5c6cb;
-        }
-        .loading {
-            text-align: center;
-            color: #667eea;
-            font-weight: bold;
-        }
-        .info {
-            background: #e8f4f8;
-            padding: 15px;
-            border-radius: 8px;
-            margin-bottom: 20px;
-            border-left: 4px solid #667eea;
-        }
-    </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Post Now - She Cooks Bakes</title>
+<style>
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;max-width:600px;margin:0 auto;padding:20px;background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);min-height:100vh}
+.container{background:white;border-radius:15px;padding:30px;box-shadow:0 10px 30px rgba(0,0,0,0.3)}
+h1{color:#2c3e50;text-align:center;margin-bottom:10px}
+.subtitle{text-align:center;color:#7f8c8d;margin-bottom:30px}
+button{width:100%;padding:15px;background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);color:white;border:none;border-radius:8px;font-size:18px;font-weight:bold;cursor:pointer;transition:all 0.3s}
+button:hover{transform:translateY(-2px);box-shadow:0 5px 15px rgba(102,126,234,0.4)}
+button:active{transform:translateY(0)}
+button:disabled{background:#95a5a6;cursor:not-allowed}
+.result{margin-top:20px;padding:15px;border-radius:8px;display:none}
+.success{background:#d4edda;color:#155724;border:1px solid #c3e6cb}
+.error{background:#f8d7da;color:#721c24;border:1px solid #f5c6cb}
+.loading{text-align:center;color:#667eea;font-weight:bold}
+.info{background:#e8f4f8;padding:15px;border-radius:8px;margin-bottom:20px;border-left:4px solid #667eea}
+</style>
 </head>
 <body>
-    <div class="container">
-        <h1>🍰 She Cooks Bakes AI</h1>
-        <p class="subtitle">Manual Post Trigger</p>
-        
-        <div class="info">
-            <strong>ℹ️ Info:</strong> This will create and publish a new blog post immediately.
-        </div>
-        
-        <button onclick="triggerPost()" id="postBtn">🚀 Publish Now</button>
-        
-        <div id="result" class="result"></div>
-    </div>
-    
-    <script>
-        function triggerPost() {
-            const btn = document.getElementById('postBtn');
-            const result = document.getElementById('result');
-            
-            btn.disabled = true;
-            btn.textContent = '⏳ Publishing...';
-            result.style.display = 'block';
-            result.className = 'result loading';
-            result.textContent = 'Creating your post... This may take 1-2 minutes.';
-            
-            fetch('/post-now', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'}
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.result && data.result.success) {
-                    result.className = 'result success';
-                    result.innerHTML = `
-                        <strong>✅ Success!</strong><br>
-                        <strong>Title:</strong> ${data.result.title}<br>
-                        <strong>Post ID:</strong> ${data.result.post_id}<br>
-                        <strong>Blog:</strong> <a href="https://${data.result.tags ? 'she-cooks-bakes.tumblr.com' : ''}" target="_blank">View on Tumblr</a>
-                    `;
-                } else {
-                    result.className = 'result error';
-                    result.innerHTML = `<strong>❌ Error:</strong> ${data.result ? data.result.error : 'Unknown error'}`;
-                }
-                btn.disabled = false;
-                btn.textContent = '🚀 Publish Now';
-            })
-            .catch(error => {
-                result.className = 'result error';
-                result.textContent = '❌ Network error: ' + error;
-                btn.disabled = false;
-                btn.textContent = '🚀 Publish Now';
-            });
-        }
-    </script>
+<div class="container">
+<h1>🍰 She Cooks Bakes AI</h1>
+<p class="subtitle">Powered by Google Gemini</p>
+<div class="info"><strong>ℹ️ Info:</strong> This will create and publish a new blog post immediately.</div>
+<button onclick="triggerPost()" id="postBtn">🚀 Publish Now</button>
+<div id="result" class="result"></div>
+</div>
+<script>
+function triggerPost(){const btn=document.getElementById('postBtn');const result=document.getElementById('result');btn.disabled=true;btn.textContent='⏳ Publishing...';result.style.display='block';result.className='result loading';result.textContent='Creating your post... This may take 1-2 minutes.';fetch('/post-now',{method:'POST',headers:{'Content-Type':'application/json'}}).then(response=>response.json()).then(data=>{if(data.result&&data.result.success){result.className='result success';result.innerHTML=`<strong>✅ Success!</strong><br><strong>Title:</strong> ${data.result.title}<br><strong>Post ID:</strong> ${data.result.post_id}<br><strong>Blog:</strong> <a href="https://shecooksandbakes.tumblr.com" target="_blank">View on Tumblr</a>`;}else{result.className='result error';result.innerHTML=`<strong>❌ Error:</strong> ${data.result?data.result.error:'Unknown error'}`;}btn.disabled=false;btn.textContent='🚀 Publish Now';}).catch(error=>{result.className='result error';result.textContent='❌ Network error: '+error;btn.disabled=false;btn.textContent='🚀 Publish Now';});}
+</script>
 </body>
-</html>
-'''
+</html>'''
 
 @app.route('/')
 def home():
     uptime = int(time.time() - start_time)
-    return jsonify({"status": "active", "service": Config.APP_NAME, "version": Config.VERSION, "uptime": f"{uptime // 3600}h {(uptime % 3600) // 60}m", "metrics": metrics.get_metrics(), "success_rate": f"{metrics.get_success_rate():.1f}%", "total_posts": db_manager.get_post_count(), "last_post": db_manager.get_last_post_time().isoformat() if db_manager.get_last_post_time() else "Never", "next_post": db_manager.get_state('next_post_time', 'Calculating...'), "blog": Config.BLOG_URL})
+    return jsonify({"status": "active", "service": Config.APP_NAME, "version": Config.VERSION, "ai_engine": "Google Gemini", "uptime": f"{uptime // 3600}h {(uptime % 3600) // 60}m", "metrics": metrics.get_metrics(), "success_rate": f"{metrics.get_success_rate():.1f}%", "total_posts": db_manager.get_post_count(), "last_post": db_manager.get_last_post_time().isoformat() if db_manager.get_last_post_time() else "Never", "next_post": db_manager.get_state('next_post_time', 'Calculating...'), "blog": Config.BLOG_URL})
 
 @app.route('/health')
 def health():
-    return jsonify({"status": "healthy", "timestamp": datetime.now().isoformat(), "database": "connected", "scheduler": "running"})
+    return jsonify({"status": "healthy", "timestamp": datetime.now().isoformat(), "database": "connected", "scheduler": "running", "ai": "Google Gemini"})
 
 @app.route('/stats')
 def stats():
@@ -597,6 +558,7 @@ def main():
     try:
         logger.info("=" * 60)
         logger.info(f"🚀 {Config.APP_NAME} v{Config.VERSION}")
+        logger.info(f"🤖 AI Engine: Google Gemini (Free & Unlimited)")
         logger.info(f"⏰ Started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         logger.info("=" * 60)
         EnvironmentValidator.validate()
@@ -619,6 +581,7 @@ def main():
         logger.info("✅ SYSTEM FULLY OPERATIONAL!")
         logger.info("=" * 60)
         logger.info("📱 Mobile posting: https://your-app.onrender.com/post-now")
+        logger.info("🏷️ Hashtag system: 2 AI-generated + global tags")
         logger.info("=" * 60)
         serve(app, host=Config.FLASK_HOST, port=Config.FLASK_PORT, threads=4, channel_timeout=60, cleanup_interval=30, _quiet=False)
     except KeyboardInterrupt:
